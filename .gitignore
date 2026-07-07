@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+preview.txt
+lookup.json
+news_test.txt
+sendkey.txt
+gmail_pass.txt
+新建 文本文档.txt
+sendkeys.txt
+gold_state.json
+gold_price_history.csv
+anthropic_key.txt
