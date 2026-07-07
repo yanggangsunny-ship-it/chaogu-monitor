@@ -185,6 +185,8 @@ CN_NAMES = {
 
 JST = timezone(timedelta(hours=9))
 MARKET_OPEN_MIN = 9 * 60          # 开盘 9:00
+MARKET_OPEN_PUSH_MIN = 9 * 60 + 15  # 开盘播报推送时点 9:15——9:00刚开盘时部分股票竞价未撮合/Yahoo未刷新,
+                                    # 会拿到前一天收盘价(2026-07-07实际发生),延后15分钟保证数据是今天的
 MARKET_CLOSE_MIN = 15 * 60 + 30   # 收盘 15:30
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1581,7 +1583,7 @@ def check_stock(stock, now, today, t, is_weekday, trading, market_pct=None):
     market_pct=日经当日涨跌幅,用于异动的大盘因子过滤"""
     events = []
     st = state[stock["code"]]
-    need_open = is_weekday and t >= MARKET_OPEN_MIN and st["last_open_date"] != today
+    need_open = is_weekday and t >= MARKET_OPEN_PUSH_MIN and st["last_open_date"] != today
     need_close = is_weekday and t >= MARKET_CLOSE_MIN and st["last_close_date"] != today
 
     if not (need_open or need_close or trading):
