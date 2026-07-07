@@ -185,8 +185,8 @@ CN_NAMES = {
 
 JST = timezone(timedelta(hours=9))
 MARKET_OPEN_MIN = 9 * 60          # 开盘 9:00
-MARKET_OPEN_PUSH_MIN = 9 * 60 + 15  # 开盘播报推送时点 9:15——9:00刚开盘时部分股票竞价未撮合/Yahoo未刷新,
-                                    # 会拿到前一天收盘价(2026-07-07实际发生),延后15分钟保证数据是今天的
+MARKET_OPEN_PUSH_MIN = 9 * 60 + 5   # 开盘播报推送时点 9:05——9:00整点部分股票竞价未撮合/Yahoo未刷新,
+                                    # 会拿到前一天收盘价(2026-07-07实际发生),稍作延后;个别未开出的股会带@昨日时刻标注
 MARKET_CLOSE_MIN = 15 * 60 + 30   # 收盘 15:30
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
