@@ -1040,7 +1040,7 @@ def check_tdnet(today):
                 raise
             print(f"TDnet清单第{attempt + 1}次超时,重试: {e}")
     for it in r.json().get("items", []):
-        td = it.get("Tdnet", {})
+        td = it.get("Tdnet", it) or it  # 镜像2026-07-07起去掉了Tdnet包装层,兼容新旧两种结构
         tid = td.get("id")
         title = td.get("title", "")
         code4 = str(td.get("company_code", ""))[:4]
@@ -1091,7 +1091,10 @@ def check_tdnet(today):
                 if parsed["forecast"]:
                     desp += f"通期预想(公司指引): {_fmt_metrics(parsed['forecast'], '较上财年')}\n\n"
             else:
-                desp += "(关键数字自动解析失败，请看原文PDF)\n\n"
+                if not td.get("url_xbrl"):
+                    desp += "(该公告未附带XBRL数据文件——美国会计基准短信等属正常情况，无法自动解析，请看原文PDF)\n\n"
+                else:
+                    desp += "(关键数字自动解析失败，请看原文PDF)\n\n"
             try:
                 quality = analyze_tanshin_quality(zip_bytes, stock["name"])
                 if quality:
