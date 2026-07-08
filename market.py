@@ -185,8 +185,7 @@ CN_NAMES = {
 
 JST = timezone(timedelta(hours=9))
 MARKET_OPEN_MIN = 9 * 60          # 开盘 9:00
-MARKET_OPEN_PUSH_MIN = 9 * 60 + 5   # 开盘播报推送时点 9:05——9:00整点部分股票竞价未撮合/Yahoo未刷新,
-                                    # 会拿到前一天收盘价(2026-07-07实际发生),稍作延后;个别未开出的股会带@昨日时刻标注
+# (开盘播报功能已于2026-07-07按用户要求取消;当日跳空缺口在收盘播报的技术信号行里体现)
 MARKET_CLOSE_MIN = 15 * 60 + 30   # 收盘 15:30
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1583,10 +1582,10 @@ def check_stock(stock, now, today, t, is_weekday, trading, market_pct=None):
     market_pct=日经当日涨跌幅,用于异动的大盘因子过滤"""
     events = []
     st = state[stock["code"]]
-    need_open = is_weekday and t >= MARKET_OPEN_PUSH_MIN and st["last_open_date"] != today
+    # 开盘播报已按用户要求取消(2026-07-07)——跳空信息仍在收盘播报的技术信号行里
     need_close = is_weekday and t >= MARKET_CLOSE_MIN and st["last_close_date"] != today
 
-    if not (need_open or need_close or trading):
+    if not (need_close or trading):
         return events
 
     data = get_price(stock["code"])
@@ -1597,14 +1596,6 @@ def check_stock(stock, now, today, t, is_weekday, trading, market_pct=None):
             plot_price(stock)
         except Exception as e:
             print(f"[{stock['name']}] 画图失败(不影响推送): {e}")
-
-    if need_open:
-        try:
-            data["gap_note"] = detect_gap(stock["code"])
-        except Exception as e:
-            print(f"[{stock['name']}] 缺口检测失败: {e}")
-        events.append(("开盘", stock, data))
-        st["last_open_date"] = today
 
     if need_close:
         events.append(("收盘", stock, data))
@@ -1669,7 +1660,7 @@ def run_once():
         except Exception as e:
             print(f"[{stock['name']}] 出错了(不影响继续运行): {e}")
 
-    for reason in ("开盘", "收盘", "异动"):
+    for reason in ("收盘", "异动"):
         items = [(s, d) for r, s, d in all_events if r == reason]
         send_batch(reason, items)
 
