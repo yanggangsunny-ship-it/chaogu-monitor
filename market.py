@@ -119,6 +119,14 @@ POSITIONS = [
     {"code": "9984.T", "name": "软银集团 (9984.T)", "qty": 100, "cost": 6500.0, "kind": "信用买"},
 ]
 
+# 信用交易保证金监控(乐天证券规则)。维持率=(受入保证金-建玉评价损)/建玉代金
+# 受入保证金=现金+代用有价证券评价额×掛目,会随现物担保波动;此处用基准值动态估算维持率,
+# ⚠偏乐观(未跟踪代用担保缩水),需用户定期用券商真实维持率校准 MARGIN_DEPOSIT
+MARGIN_DEPOSIT = 1338696   # 受入保证金基准(2026-07-09由维持率32.41%反推;现物担保约123万+现金约11万)
+MARGIN_CALL_LINE = 20      # 乐天追证线:维持率<20%→翌々营业日12:00前补钱或平仓
+MARGIN_FORCE_LINE = 10     # 乐天强制平仓线:<10%券商无需追证直接砍建玉
+MARGIN_WARN_LINE = 28      # 自定预警线:维持率≤此值收盘播报标红警告(用户当前32.4%已贴近建仓线30%,预警从早)
+
 # 潜力股筛选：6大领域股票池(共110只,均已验证有效)。每天收盘后先按当日成交额取每领域前SECTOR_TOP_N只，
 # 再对入选股跑走势条件；SCREEN_EXTRA=不参与排名、每天必扫的自选(如持仓ETF)
 SECTOR_TOP_N = 20
@@ -624,6 +632,28 @@ def _profit_html(profit, pct):
     return f"{mark}{sign}{_yen(profit)}円 ({sign}{pct}%)"
 
 
+def _margin_status(tategyoku_cost, eval_loss):
+    """信用维持率测算+追证预警。tategyoku_cost=建玉代金,eval_loss=当前评价损(亏为正)。
+    维持率=(受入保证金-评价损)/建玉代金;算出距追证线20%还能让建玉再跌多少%"""
+    cur_val = tategyoku_cost - eval_loss
+    mr = (MARGIN_DEPOSIT - eval_loss) / tategyoku_cost * 100
+    # 触及追证线20%时的评价损 → 建玉还能再跌的比例
+    max_loss_call = MARGIN_DEPOSIT - MARGIN_CALL_LINE / 100 * tategyoku_cost
+    drop_to_call = (max_loss_call - eval_loss) / cur_val * 100 if cur_val > 0 else 0
+    max_loss_force = MARGIN_DEPOSIT - MARGIN_FORCE_LINE / 100 * tategyoku_cost
+    drop_to_force = (max_loss_force - eval_loss) / cur_val * 100 if cur_val > 0 else 0
+    flag = "🟢" if mr > MARGIN_WARN_LINE else "🔴"
+    head = f"{flag}信用维持率(估) **{mr:.1f}%**"
+    if mr <= MARGIN_WARN_LINE:
+        head += f" ⚠已≤预警线{MARGIN_WARN_LINE}%"
+    return (
+        f"{head}\n\n"
+        f"距追证线{MARGIN_CALL_LINE}%: 建玉再跌{drop_to_call:.1f}% | "
+        f"距强平线{MARGIN_FORCE_LINE}%: 再跌{drop_to_force:.1f}%\n\n"
+        f"(估算假设受入保证金{_yen(MARGIN_DEPOSIT)}円不变;实际含现物代用担保会同步缩水,真跌时维持率降更快)"
+    )
+
+
 def position_report():
     """持仓盈亏报告：现物/信用分开两个分区(各自小计+按盈亏%降序)，最后总计；盈利红/亏损绿"""
     groups = {"现物": [], "信用买": []}
@@ -658,11 +688,14 @@ def position_report():
             f'{p["name"]} {p["qty"]}股 {_yen(p["cost"])}→{_yen(price)}円 {_profit_html(pf, ppct)}'
             for ppct, pf, price, p in rows
         ]
-        sections.append(
+        block = (
             f"## {label}({len(rows)}只)\n\n"
             f"**小计: {_profit_html(profit, pct)}** (市值{_yen(value)}円 / 成本{_yen(cost)}円)\n\n"
             + "\n\n".join(lines)
         )
+        if kind == "信用买":  # 信用仓附维持率测算+追证预警(传建玉代金和当前评价损)
+            block += "\n\n" + _margin_status(cost, cost - value)
+        sections.append(block)
 
     if not sections:
         return ""
