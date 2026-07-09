@@ -105,7 +105,7 @@ STOCKS = [
 
 # 持仓列表(2026-07-04截图录入)：现物=平均取得价，信用买建=建单价；开盘/收盘推送末尾附盈亏报告
 POSITIONS = [
-    {"code": "1579.T", "name": "日经Bull2倍ETF (1579)", "qty": 950, "cost": 835.88, "kind": "现物"},
+    {"code": "1579.T", "name": "日经Bull2倍ETF (1579)", "qty": 1200, "cost": 831.53, "kind": "现物"},
     {"code": "4751.T", "name": "CyberAgent (4751)", "qty": 100, "cost": 1379.00, "kind": "现物"},
     {"code": "7186.T", "name": "横滨金融集团 (7186)", "qty": 100, "cost": 1781.50, "kind": "现物"},
     {"code": "8306.T", "name": "三菱UFJ (8306)", "qty": 100, "cost": 3135.00, "kind": "现物"},
@@ -186,7 +186,9 @@ CN_NAMES = {
 JST = timezone(timedelta(hours=9))
 MARKET_OPEN_MIN = 9 * 60          # 开盘 9:00
 # (开盘播报功能已于2026-07-07按用户要求取消;当日跳空缺口在收盘播报的技术信号行里体现)
-MARKET_CLOSE_MIN = 15 * 60 + 30   # 收盘 15:30
+MARKET_CLOSE_MIN = 15 * 60 + 30   # 收盘 15:30(用于交易时段判断)
+MARKET_CLOSE_PUSH_MIN = 15 * 60 + 40  # 收盘播报/选股推送时点 15:40——15:30整点收盘集合竞价(Itayose)的
+                                      # 最终价约15:30打出,Yahoo需1~2分钟才刷新;15:30就推会拿到收盘前最后连续竞价的旧tick(如15:18)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(BASE_DIR, "state.json")
@@ -1583,7 +1585,7 @@ def check_stock(stock, now, today, t, is_weekday, trading, market_pct=None):
     events = []
     st = state[stock["code"]]
     # 开盘播报已按用户要求取消(2026-07-07)——跳空信息仍在收盘播报的技术信号行里
-    need_close = is_weekday and t >= MARKET_CLOSE_MIN and st["last_close_date"] != today
+    need_close = is_weekday and t >= MARKET_CLOSE_PUSH_MIN and st["last_close_date"] != today
 
     if not (need_close or trading):
         return events
@@ -1680,7 +1682,7 @@ def run_once():
             check_tdnet(today)
         except Exception as e:
             print(f"TDnet披露检查失败(不影响其他功能): {e}")
-        if t >= MARKET_CLOSE_MIN and g.get("screen_date") != today:
+        if t >= MARKET_CLOSE_PUSH_MIN and g.get("screen_date") != today:
             try:
                 run_screen(today)
                 g["screen_date"] = today
