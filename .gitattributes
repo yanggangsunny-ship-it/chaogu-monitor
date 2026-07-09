@@ -1,0 +1,4 @@
+# 价格历史CSV是纯追加文件：并发运行各自在末尾append一行，用union合并策略保留双方新增行，
+# 避免每5分钟一轮的数据提交在接近收盘时因同一文件尾部冲突而push失败(2026-07-09修)
+price_history_*.csv merge=union
+screen_hits.csv merge=union

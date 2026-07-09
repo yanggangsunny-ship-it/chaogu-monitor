@@ -43,8 +43,32 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A state.json '*.csv' '*.png' || true
-          if ! git diff --cached --quiet; then
-            git commit -m "数据更新 $(TZ=Asia/Tokyo date '+%Y-%m-%d %H:%M') JST"
-            git pull --rebase origin main
-            git push
+          if git diff --cached --quiet; then
+            echo "无数据变化，跳过提交"
+            exit 0
           fi
+          git commit -q -m "数据更新 $(TZ=Asia/Tokyo date '+%Y-%m-%d %H:%M') JST"
+          # 并发运行会争抢push：重试若干次。CSV靠.gitattributes的union策略自动合并；
+          # state.json/png等非union文件若冲突则取远端(本轮我方更新丢弃,下一轮自动重生)
+          for attempt in 1 2 3 4 5 6; do
+            git fetch -q origin main
+            if git rebase -q origin/main 2>/dev/null; then
+              if git push -q 2>/dev/null; then
+                echo "第 $attempt 次尝试推送成功"
+                exit 0
+              fi
+            else
+              # rebase冲突(CSV已被union自动合并,能到这里的只剩state.json/png)：--ours=远端(rebase语义下ours是被rebase到的origin/main)
+              git checkout --ours -- . 2>/dev/null || true
+              git add -A
+              GIT_EDITOR=true git rebase --continue 2>/dev/null || git rebase --abort 2>/dev/null || true
+              if git push -q 2>/dev/null; then
+                echo "第 $attempt 次尝试(解决冲突后)推送成功"
+                exit 0
+              fi
+            fi
+            sleep $(( (RANDOM % 6) + 2 ))
+          done
+          # 6次都没推上去：不让工作流报红(否则GitHub发失败邮件)，本轮数据丢弃，下一轮会补
+          echo "::warning::数据提交重试6次仍失败，本轮数据未保存(下一轮自动补)"
+          exit 0
