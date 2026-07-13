@@ -119,7 +119,7 @@
     "down_tier": 0
   },
   "_global": {
-    "earnings_check_date": "2026-07-13",
+    "earnings_check_date": "2026-07-14",
     "earnings": {
       "9984.T": {
         "date": "2026-08-06",
@@ -183,7 +183,7 @@
     "tanshin_seen": [
       "1263989"
     ],
-    "premarket_date": "2026-07-13",
+    "premarket_date": "2026-07-14",
     "screen_date": "2026-07-13"
   }
 }
