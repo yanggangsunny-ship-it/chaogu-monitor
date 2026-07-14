@@ -192,7 +192,8 @@ CN_NAMES = {
 # ================================================
 
 JST = timezone(timedelta(hours=9))
-MARKET_OPEN_MIN = 9 * 60          # 开盘 9:00
+MARKET_OPEN_MIN = 9 * 60          # 开盘 9:00(仅用于盘前情报"9:00前"判断)
+INTRADAY_START_MIN = 9 * 60 + 5   # 盘中抓取起点 9:05——9:00-9:05开盘竞价刚撮合/Yahoo未刷新,会抓到昨收造成假异动
 # (开盘播报功能已于2026-07-07按用户要求取消;当日跳空缺口在收盘播报的技术信号行里体现)
 MARKET_CLOSE_MIN = 15 * 60 + 30   # 收盘 15:30(用于交易时段判断)
 MARKET_CLOSE_PUSH_MIN = 15 * 60 + 40  # 收盘播报/选股推送时点 15:40——15:30整点收盘集合竞价(Itayose)的
@@ -279,7 +280,7 @@ def is_trading_time():
     if is_market_closed_day(now.date()):
         return False
     t = now.hour * 60 + now.minute
-    morning = MARKET_OPEN_MIN <= t <= 11 * 60 + 30
+    morning = INTRADAY_START_MIN <= t <= 11 * 60 + 30   # 9:05起,跳过开盘头5分钟的脏数据窗口
     afternoon = 12 * 60 + 30 <= t <= MARKET_CLOSE_MIN
     return morning or afternoon
 
