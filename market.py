@@ -1205,7 +1205,11 @@ def _rsi_last2(closes, n=14):
 
 
 GOLDEN_CROSS_VOL_RATIO = 1.2   # 金叉当日成交量须≥该倍数×20日均量才算有效(缩量金叉不报)
-CONSECUTIVE_MARK_DAYS = 5      # 连续上榜达到该天数→潜力股推送里重点标记⭐
+# 潜力股重点标记(不要求连续,捕捉反复活跃)：近7天≥3次 或 近30天≥10次上榜
+MARK_WEEK_DAYS = 7
+MARK_WEEK_HITS = 3
+MARK_MONTH_DAYS = 30
+MARK_MONTH_HITS = 10
 GAP_ALERT_PCT = 1.5            # 开盘跳空幅度≥该%才在开盘播报里标注
 TECH_VOL_ANOMALY = 2.0         # 成交量≥该倍数×20日均量算异常放量(技术日报)
 RSI_OVERBOUGHT = 70            # RSI超买线
@@ -1226,16 +1230,28 @@ def _load_hit_history():
     return hist
 
 
-def _streak_days(code, today, hist):
-    """含今天在内的连续上榜天数：从最近一个既往筛选日往回数，断档即停"""
-    prev_dates = sorted((d for d in hist if d < today), reverse=True)
-    streak = 1
-    for d in prev_dates:
-        if code in hist[d]:
-            streak += 1
-        else:
-            break
-    return streak
+def _hit_counts(code, today, hist):
+    """含今天：返回(近MARK_WEEK_DAYS天上榜次数, 近MARK_MONTH_DAYS天上榜次数)"""
+    from datetime import date
+    t0 = date.fromisoformat(today)
+    w = m = 1  # 今天这次(今天尚未写入csv)
+    for d, codes in hist.items():
+        if d >= today or code not in codes:
+            continue
+        try:
+            delta = (t0 - date.fromisoformat(d)).days
+        except ValueError:
+            continue
+        if delta < MARK_WEEK_DAYS:
+            w += 1
+        if delta < MARK_MONTH_DAYS:
+            m += 1
+    return w, m
+
+
+def _is_marked(w, m):
+    """近7天≥3次 或 近30天≥10次 → 重点标记"""
+    return w >= MARK_WEEK_HITS or m >= MARK_MONTH_HITS
 
 
 def screen_stock(code):
@@ -1360,22 +1376,26 @@ def run_screen(today):
             results.append((sector, known or f"{name} ({code})", code, hits, facts))
 
     if results:
-        # 连续上榜天数(基于既往screen_hits.csv历史,今天写入前计算)
+        # 上榜频次(基于既往screen_hits.csv历史,今天写入前计算): (近7天次数,近30天次数)
         hist = _load_hit_history()
-        streaks = {code: _streak_days(code, today, hist) for _, _, code, _, _ in results}
+        counts = {code: _hit_counts(code, today, hist) for _, _, code, _, _ in results}
 
         # 统一排序(推送和CSV一致): 按领域顺序, 组内按20日涨幅(趋势强度)从强到弱
         sector_order = {s: i for i, s in enumerate(list(SECTOR_UNIVERSE.keys()) + ["自选"])}
         results.sort(key=lambda r: (sector_order.get(r[0], 99), -r[4]["chg20"]))
 
-        # 连续≥N日上榜的置顶重点区
-        starred = [(name, streaks[code]) for _, name, code, _, _ in results if streaks[code] >= CONSECUTIVE_MARK_DAYS]
+        def freq_tag(code):
+            w, m = counts[code]
+            return f"近7天{w}次/近30天{m}次上榜"
+
+        # 频繁上榜的置顶重点区(近7天≥3 或 近30天≥10)
+        starred = [(name, code) for _, name, code, _, _ in results if _is_marked(*counts[code])]
         sections = []
         if starred:
-            starred.sort(key=lambda x: -x[1])
+            starred.sort(key=lambda x: -counts[x[1]][0])  # 近7天次数降序
             sections.append(
-                "⭐【重点关注·持续上榜】\n\n"
-                + "\n\n".join(f"🔥**{name}** 已连续{n}个交易日出现在潜力股列表" for name, n in starred)
+                "⭐【重点关注·频繁上榜】\n\n"
+                + "\n\n".join(f"🔥**{name}** {freq_tag(code)}" for name, code in starred)
             )
 
         for sector in list(SECTOR_UNIVERSE.keys()) + ["自选"]:
@@ -1383,16 +1403,15 @@ def run_screen(today):
             if rows:
                 body_parts = []
                 for _, name, code, hits, facts in rows:
-                    n = streaks[code]
-                    star = f"⭐🔥连续{n}日上榜 " if n >= CONSECUTIVE_MARK_DAYS else ""
+                    star = f"⭐🔥{freq_tag(code)} " if _is_marked(*counts[code]) else ""
                     body_parts.append(
                         f"🎯{star}**{name}** (20日{facts['chg20']:+}%)\n\n命中: {' | '.join(hits)}\n\n{_facts_line(facts)}"
                     )
                 sections.append(f"【{sector}】\n\n" + "\n\n".join(body_parts))
         _send_text(
-            f"潜力股提示({len(results)}只{'，⭐' + str(len(starred)) + '只持续上榜' if starred else ''})",
+            f"潜力股提示({len(results)}只{'，⭐' + str(len(starred)) + '只频繁上榜' if starred else ''})",
             "\n\n---\n\n".join(sections)
-            + f"\n\n(池={len(pool)}只=各领域成交额前{SECTOR_TOP_N},组内按20日涨幅排序;⭐=连续{CONSECUTIVE_MARK_DAYS}日以上上榜;条件:放量金叉(量≥{GOLDEN_CROSS_VOL_RATIO}倍)/放量破60日新高/RSI超卖回升/回踩MA20;仅走势信号,不构成买入建议)",
+            + f"\n\n(池={len(pool)}只=各领域成交额前{SECTOR_TOP_N},组内按20日涨幅排序;⭐=近7天≥{MARK_WEEK_HITS}次或近30天≥{MARK_MONTH_HITS}次上榜;条件:放量金叉(量≥{GOLDEN_CROSS_VOL_RATIO}倍)/放量破60日新高/RSI超卖回升/回踩MA20;仅走势信号,不构成买入建议)",
             mail=True,
         )
         hits_csv = os.path.join(BASE_DIR, "screen_hits.csv")
@@ -1401,14 +1420,15 @@ def run_screen(today):
             w = csv.writer(f)
             if is_new:
                 w.writerow(["日期", "领域", "代码", "名称", "命中条件", "现价", "当日%", "20日涨幅%", "量比", "RSI",
-                            "52周低(日期)", "52周高(日期)", "连续上榜天数"])
+                            "52周低(日期)", "52周高(日期)", "近7天次数", "近30天次数"])
             for sector, name, code, hits, facts in results:
+                w7, w30 = counts[code]
                 w.writerow([
                     today, sector, code, name, "；".join(hits),
                     facts["price"], facts["day_chg"], facts["chg20"],
                     round(facts["vol_ratio"], 2), round(facts["rsi"], 1) if facts["rsi"] is not None else "",
                     f"{facts['w52_low']}({facts['w52_low_date']})", f"{facts['w52_high']}({facts['w52_high_date']})",
-                    streaks[code],
+                    w7, w30,
                 ])
     else:
         print(f"[筛选]{len(pool)}只均未命中")
