@@ -46,7 +46,7 @@
     "last_close_date": "2026-07-15",
     "alert_date": "2026-07-16",
     "up_tier": 0,
-    "down_tier": 0
+    "down_tier": 1
   },
   "4063.T": {
     "last_open_date": "2026-07-08",
