@@ -25,7 +25,7 @@
     "last_close_date": "2026-07-17",
     "alert_date": "2026-07-21",
     "up_tier": 0,
-    "down_tier": 0
+    "down_tier": 1
   },
   "7011.T": {
     "last_open_date": "2026-07-08",
@@ -39,7 +39,7 @@
     "last_close_date": "2026-07-17",
     "alert_date": "2026-07-21",
     "up_tier": 0,
-    "down_tier": 0
+    "down_tier": 2
   },
   "6264.T": {
     "last_open_date": "2026-07-08",
@@ -74,7 +74,7 @@
     "last_close_date": "2026-07-17",
     "alert_date": "2026-07-21",
     "up_tier": 0,
-    "down_tier": 0
+    "down_tier": 1
   },
   "7186.T": {
     "last_open_date": "2026-07-08",
