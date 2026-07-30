@@ -60,14 +60,14 @@
     "last_close_date": "2026-07-29",
     "alert_date": "2026-07-30",
     "up_tier": 9,
-    "down_tier": 0
+    "down_tier": 1
   },
   "9501.T": {
     "last_open_date": "2026-07-08",
     "last_close_date": "2026-07-29",
     "alert_date": "2026-07-30",
     "up_tier": 0,
-    "down_tier": 0
+    "down_tier": 1
   },
   "8306.T": {
     "last_open_date": "2026-07-08",
