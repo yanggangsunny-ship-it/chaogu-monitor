@@ -328,25 +328,53 @@ def log_price(stock, data):
 
 
 def plot_price(stock):
-    """读取该股票的历史CSV，重新画出价格走势图并覆盖保存成PNG"""
+    """读取该股票的历史CSV，画价格走势(上)+日成交量柱(下)双图并覆盖保存成PNG。
+    注：CSV的成交量是当日累计值(每5分钟抓一次一路累加)，按天取最大值=当日总成交量，画成日柱"""
     csv_file = _csv_path(stock["code"])
     times, prices = [], []
+    day_vol = {}      # 日期 -> 当日总成交量(取当天最大的累计值)
+    day_close = {}    # 日期 -> 当日最后价格(判断阳线/阴线给柱子上色)
     with open(csv_file, newline="", encoding="utf-8-sig") as f:
         for row in csv.DictReader(f):
-            times.append(datetime.strptime(row["抓取时间"], "%Y-%m-%d %H:%M:%S"))
+            ts = datetime.strptime(row["抓取时间"], "%Y-%m-%d %H:%M:%S")
+            times.append(ts)
             prices.append(float(row["价格"]))
+            try:
+                vol = float(row.get("成交量") or 0)
+            except ValueError:
+                vol = 0
+            d = ts.date()
+            if vol > day_vol.get(d, 0):
+                day_vol[d] = vol
+            day_close[d] = (float(row["价格"]), float(row.get("昨收") or 0))
 
-    plt.figure(figsize=(12, 5))
-    plt.plot(times, prices, marker="o", markersize=2, linewidth=1)
-    plt.title(f"{stock['name']} 价格走势")
-    plt.xlabel("时间")
-    plt.ylabel("价格(円)")
-    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
-    plt.gcf().autofmt_xdate()
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(_chart_path(stock["code"]))
-    plt.close()
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1, figsize=(12, 7), sharex=True,
+        gridspec_kw={"height_ratios": [3, 1], "hspace": 0.08},
+    )
+    ax1.plot(times, prices, marker="o", markersize=2, linewidth=1)
+    ax1.set_title(f"{stock['name']} 价格走势")
+    ax1.set_ylabel("价格(円)")
+    ax1.grid(True, alpha=0.3)
+
+    if day_vol:
+        days = sorted(day_vol)
+        vols = [day_vol[d] for d in days]
+        # 涨日红、跌日绿(中式配色)；用当日最后价vs昨收判断
+        colors = ["#e03131" if day_close[d][0] >= day_close[d][1] else "#2f9e44" for d in days]
+        ax2.bar([datetime.combine(d, datetime.min.time()) for d in days], vols,
+                width=0.6, color=colors, alpha=0.8)
+        unit, div = ("百万股", 1e6) if max(vols) >= 1e6 else ("千股", 1e3)
+        ax2.set_ylabel(f"成交量({unit})")
+        ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x / div:,.0f}"))
+    else:
+        ax2.set_ylabel("成交量")
+    ax2.grid(True, alpha=0.3)
+    ax2.set_xlabel("时间")
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
+    fig.autofmt_xdate()
+    plt.savefig(_chart_path(stock["code"]), bbox_inches="tight")
+    plt.close(fig)
 
 
 def _dedup_news(raw_items):
