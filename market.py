@@ -1007,7 +1007,10 @@ def parse_tanshin_summary(zip_bytes):
         return None
 
     is_actual = lambda ctx: ctx.startswith("Current") and "Result" in ctx
-    is_forecast = lambda ctx: "Forecast" in ctx
+    # ⚠通期预想必须限定 CurrentYearDuration：短信里同时存在上半年(CurrentAccumulatedQ2Duration)预想，
+    # 只判"Forecast"会先命中上半年数字并误当成全年(2026-08-01发那科实例:误报4660亿,实为9481亿)
+    is_fy_forecast = lambda ctx: "CurrentYearDuration" in ctx and "Forecast" in ctx
+    is_any_forecast = lambda ctx: "Forecast" in ctx
 
     out = {"actual": {}, "forecast": {}, "eps": None}
     for label, names in _TANSHIN_METRICS:
@@ -1015,9 +1018,12 @@ def parse_tanshin_summary(zip_bytes):
         v = pick(names, is_actual)
         if v is not None:
             out["actual"][label] = (v, pick(chg_names, is_actual))
-        fv = pick(names, is_forecast)
+        fv = pick(names, is_fy_forecast)
+        fchg = pick(chg_names, is_fy_forecast)
+        if fv is None:  # 没有全年口径(如仅公布上半年预想)才退回任意预想
+            fv, fchg = pick(names, is_any_forecast), pick(chg_names, is_any_forecast)
         if fv is not None:
-            out["forecast"][label] = (fv, pick(chg_names, is_forecast))
+            out["forecast"][label] = (fv, fchg)
     # 实绩EPS(单位:円)，用于与分析师预期对比
     out["eps"] = pick(
         ("NetIncomePerShare", "BasicNetIncomePerShare", "BasicEarningsPerShareIFRS",
