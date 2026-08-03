@@ -119,15 +119,16 @@
     "down_tier": 1
   },
   "_global": {
-    "earnings_check_date": "2026-08-03",
+    "earnings_check_date": "2026-08-04",
     "earnings": {
       "9984.T": {
         "date": "2026-08-06",
-        "estimate": false
+        "estimate": false,
+        "reminded_for": "2026-08-06"
       },
       "285A.T": {
-        "date": "2026-07-31",
-        "estimate": false,
+        "date": "2026-10-30",
+        "estimate": true,
         "reminded_for": "2026-07-31"
       },
       "7012.T": {
@@ -181,7 +182,8 @@
       },
       "7974.T": {
         "date": "2026-08-06",
-        "estimate": false
+        "estimate": false,
+        "reminded_for": "2026-08-06"
       },
       "1579.T": {},
       "8593.T": {
@@ -198,7 +200,7 @@
       "1269083",
       "1270074"
     ],
-    "premarket_date": "2026-08-03",
+    "premarket_date": "2026-08-04",
     "screen_date": "2026-08-03"
   }
 }
