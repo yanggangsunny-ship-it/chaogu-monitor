@@ -22,19 +22,33 @@ def _base_dir() -> str:
 
 
 TRACK_PATH = os.path.join(_base_dir(), "tracker.json")
+def _candidate_dirs() -> list[str]:
+    """exe所在目录、其上一级、再上一级 —— 打包版(dist目录)与源码版(quant目录)共用同一份数据"""
+    d = _base_dir()
+    return [d, os.path.dirname(d), os.path.dirname(os.path.dirname(d))]
+
+
+def _find_existing(fname: str) -> str | None:
+    for base in _candidate_dirs():
+        p = os.path.join(base, fname)
+        if os.path.exists(p):
+            return p
+    return None
+
+
 HORIZONS = (5, 10, 20, 30)      # 观察节点(交易日)
 
 
 def load() -> list[dict]:
     try:
-        with open(TRACK_PATH, encoding="utf-8") as f:
+        with open(_find_existing("tracker.json") or TRACK_PATH, encoding="utf-8") as f:
             return json.load(f).get("picks", [])
     except (OSError, json.JSONDecodeError):
         return []
 
 
 def save(picks: list[dict]) -> None:
-    with open(TRACK_PATH, "w", encoding="utf-8") as f:
+    with open(_find_existing("tracker.json") or TRACK_PATH, "w", encoding="utf-8") as f:
         json.dump({"picks": picks}, f, ensure_ascii=False, indent=1)
 
 

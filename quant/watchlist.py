@@ -16,10 +16,24 @@ def _base_dir() -> str:
 
 WATCH_PATH = os.path.join(_base_dir(), "watchlist.json")
 
+def _candidate_dirs() -> list[str]:
+    """exe所在目录、其上一级、再上一级 —— 打包版(dist目录)与源码版(quant目录)共用同一份数据"""
+    d = _base_dir()
+    return [d, os.path.dirname(d), os.path.dirname(os.path.dirname(d))]
+
+
+def _find_existing(fname: str) -> str | None:
+    for base in _candidate_dirs():
+        p = os.path.join(base, fname)
+        if os.path.exists(p):
+            return p
+    return None
+
+
 
 def load() -> list[str]:
     try:
-        with open(WATCH_PATH, encoding="utf-8") as f:
+        with open(_find_existing("watchlist.json") or WATCH_PATH, encoding="utf-8") as f:
             data = json.load(f)
         return [str(t) for t in data.get("tickers", [])]
     except (OSError, json.JSONDecodeError, AttributeError):
@@ -32,7 +46,7 @@ def save(tickers: list[str]) -> None:
         if t and t not in seen:
             seen.add(t)
             out.append(t)
-    with open(WATCH_PATH, "w", encoding="utf-8") as f:
+    with open(_find_existing("watchlist.json") or WATCH_PATH, "w", encoding="utf-8") as f:
         json.dump({"tickers": out}, f, ensure_ascii=False, indent=1)
 
 

@@ -697,9 +697,10 @@ class MainWindow(QtWidgets.QMainWindow):
         ul.addWidget(QtWidgets.QLabel(
             "持仓明细(数量/成本可直接双击修改，改完点「保存改动」；数据存 portfolio.json)"))
         self.tbl_pos = QtWidgets.QTableWidget()
-        self.tbl_pos.setColumnCount(10)
+        self.tbl_pos.setColumnCount(14)
         self.tbl_pos.setHorizontalHeaderLabels(
-            ["代码", "公司名", "类别", "数量", "成本", "现价", "市值", "盈亏", "盈亏%", "上行/下行"])
+            ["代码", "公司名", "类别", "数量", "成本", "建仓日", "现价", "市值",
+             "账面盈亏", "持有天数", "利息+管理费", "净盈亏", "净盈亏%", "上行/下行"])
         self.tbl_pos.itemSelectionChanged.connect(self._on_pos_select)
         ul.addWidget(self.tbl_pos)
         split.addWidget(up)
@@ -749,12 +750,15 @@ class MainWindow(QtWidgets.QMainWindow):
         t.setRowCount(len(rows))
         for i, r in enumerate(rows):
             for j, v in enumerate([r["ticker"], r.get("name", ""), r.get("kind", "现物"),
-                                   str(r["qty"]), f"{r['cost']:g}"]):
+                                   str(r["qty"]), f"{r['cost']:g}", r.get("open_date", "")]):
                 it = QtWidgets.QTableWidgetItem(v)
-                if j in (0, 1, 2):     # 代码/名称/类别只读
+                if j in (0, 1, 2):     # 代码/名称/类别只读；数量/成本/建仓日可改
                     it.setFlags(it.flags() & ~QtCore.Qt.ItemIsEditable)
+                if j == 5 and not v and r.get("kind") == "信用买":
+                    it.setBackground(QtGui.QColor("#fff3bf"))   # 信用仓缺建仓日→高亮提醒
+                    it.setToolTip("信用买需要建仓日期才能算利息，双击填写(格式 2026-06-12)")
                 t.setItem(i, j, it)
-            for j in range(5, 10):
+            for j in range(6, 14):
                 t.setItem(i, j, QtWidgets.QTableWidgetItem(""))
         t.resizeColumnsToContents()
         return rows
@@ -802,6 +806,11 @@ class MainWindow(QtWidgets.QMainWindow):
             try:
                 r["qty"] = int(float(self.tbl_pos.item(i, 3).text()))
                 r["cost"] = float(self.tbl_pos.item(i, 4).text())
+                od = (self.tbl_pos.item(i, 5).text() or "").strip()
+                if od:
+                    r["open_date"] = od
+                elif "open_date" in r:
+                    del r["open_date"]
             except (ValueError, AttributeError):
                 continue
         portfolio.save(rows)
@@ -855,26 +864,48 @@ class MainWindow(QtWidgets.QMainWindow):
             a = portfolio.analyze(r, price, lv)
             a["_levels"] = lv
             self._pf_results[i] = a
-            for j, v in [(5, f"{price:,.0f}"), (6, f"{a['value']:,.0f}"),
-                         (7, f"{a['pnl']:+,.0f}"), (8, f"{a['pnl_pct']:+.1f}%"),
-                         (9, f"{a['ratio']:.2f}" if a.get("ratio") == a.get("ratio") else "-")]:
+            carry = a.get("carry_cost", 0.0)
+            is_margin = a["kind"] == "信用买"
+            cells = [
+                (6, f"{price:,.0f}"), (7, f"{a['value']:,.0f}"),
+                (8, f"{a['pnl']:+,.0f}"),
+                (9, f"{a['hold_days']}天" if is_margin and a["hold_days"] else
+                    ("待补日期" if is_margin else "—")),
+                (10, f"-{carry:,.0f}" if carry else ("待补日期" if is_margin else "—")),
+                (11, f"{a['net_pnl']:+,.0f}"), (12, f"{a['net_pnl_pct']:+.1f}%"),
+                (13, f"{a['ratio']:.2f}" if a.get("ratio") == a.get("ratio") else "-"),
+            ]
+            for j, v in cells:
                 it = QtWidgets.QTableWidgetItem(v)
                 it.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-                if j in (7, 8):
+                if j == 8:
                     it.setForeground(QtCore.Qt.red if a["pnl"] >= 0 else QtCore.Qt.darkGreen)
+                elif j in (11, 12):
+                    it.setForeground(QtCore.Qt.red if a["net_pnl"] >= 0 else QtCore.Qt.darkGreen)
+                elif j == 10 and carry:
+                    it.setForeground(QtGui.QColor("#e8590c"))     # 成本用橙色
+                elif j in (9, 10) and v == "待补日期":
+                    it.setForeground(QtGui.QColor("#f08c00"))
                 self.tbl_pos.setItem(i, j, it)
         self.tbl_pos.resizeColumnsToContents()
 
         valid = [a for a in self._pf_results if a]
         t = portfolio.totals(valid)
+        carry_txt = (f"   利息成本 -{t['carry_cost']:,.0f}円" if t["carry_cost"] else "")
         self.lbl_pf.setText(
             f"总市值 {t['value']:,.0f}円   成本 {t['cost_amt']:,.0f}円   "
-            f"盈亏 {t['pnl']:+,.0f}円 ({t['pnl_pct']:+.1f}%)")
+            f"账面 {t['pnl']:+,.0f}円{carry_txt}   净盈亏 {t['net_pnl']:+,.0f}円 "
+            f"({t['net_pnl_pct']:+.1f}%)")
         self.lbl_pf.setStyleSheet(
-            f"font-size:14px; font-weight:bold; color:{'#c92a2a' if t['pnl'] >= 0 else '#2f9e44'};")
+            f"font-size:14px; font-weight:bold; color:{'#c92a2a' if t['net_pnl'] >= 0 else '#2f9e44'};")
 
         L = ["══ 组合层面情景测算 ══",
-             f"  当前     : 市值 {t['value']:>12,.0f}円   盈亏 {t['pnl']:>+11,.0f}円 ({t['pnl_pct']:+.1f}%)"]
+             f"  当前     : 市值 {t['value']:>12,.0f}円   账面盈亏 {t['pnl']:>+11,.0f}円 ({t['pnl_pct']:+.1f}%)"]
+        if t["carry_cost"]:
+            L += [f"  信用成本 : 已付利息+管理费 {t['carry_cost']:>+11,.0f}円"
+                  f"   每天还在增加 {t['daily_carry']:,.0f}円",
+                  f"  → 净盈亏 : {t['net_pnl']:>+11,.0f}円 ({t['net_pnl_pct']:+.1f}%)  "
+                  f"(以下情景值均已扣除利息)"]
         for k, lbl in [("T1", "全部到T1"), ("T2", "全部到T2"), ("T3", "全部到T3"), ("stop", "全部跌破止损")]:
             d = t[k] - t["pnl"]
             L.append(f"  {lbl:<9}: 盈亏 {t[k]:>+11,.0f}円   (相对现在 {d:+,.0f}円)")
@@ -911,7 +942,19 @@ class MainWindow(QtWidgets.QMainWindow):
         L = [f"══ {a['ticker']}  {a['name']}  [{a['kind']}] ══",
              f"  持有 {a['qty']:,}股   成本 {a['cost']:,.2f}円   现价 {a['price']:,.0f}円",
              f"  投入 {a['cost_amt']:,.0f}円 → 市值 {a['value']:,.0f}円   "
-             f"当前盈亏 {a['pnl']:+,.0f}円 ({a['pnl_pct']:+.1f}%)", ""]
+             f"账面盈亏 {a['pnl']:+,.0f}円 ({a['pnl_pct']:+.1f}%)"]
+        if a["kind"] == "信用买":
+            if a["hold_days"]:
+                import portfolio as _pf
+                L += [f"  建仓 {a['open_date']}，持有 {a['hold_days']} 天",
+                      f"  信用成本: 利息 {a['interest']:,.0f}円"
+                      f"(年{_pf.MARGIN_RATE_ANNUAL:.2%}) + 管理费 {a['mgmt_fee']:,.0f}円"
+                      f" = {a['carry_cost']:,.0f}円   每天 {a['daily_carry']:,.0f}円",
+                      f"  → 净盈亏 {a['net_pnl']:+,.0f}円 ({a['net_pnl_pct']:+.1f}%)"]
+            else:
+                L.append("  ⚠信用买但未填建仓日期 → 无法计算利息。"
+                         "请在上方表格「建仓日」列双击填写(如 2026-06-12)")
+        L.append("")
         if not a["scenarios"]:
             L.append("  (无法计算价位，可能数据不足)")
         else:
