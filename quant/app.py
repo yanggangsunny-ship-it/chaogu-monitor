@@ -177,9 +177,10 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs.addTab(self._tab_screener(), "② 每日领域榜 ★")
         tabs.addTab(self._tab_diagnosis(), "③ 个股趋势诊断")
         tabs.addTab(self._tab_portfolio(), "④ 我的持仓 ★")
-        tabs.addTab(self._tab_backtest(), "⑤ 因子回测(研究用)")
-        tabs.addTab(self._tab_signal(), "⑥ 信号点位")
-        tabs.addTab(self._tab_log(), "⑦ 试验登记册")
+        tabs.addTab(self._tab_tracker(), "⑤ 观察记录 ★")
+        tabs.addTab(self._tab_backtest(), "⑥ 因子回测(研究用)")
+        tabs.addTab(self._tab_signal(), "⑦ 信号点位")
+        tabs.addTab(self._tab_log(), "⑧ 试验登记册")
         self.setCentralWidget(tabs)
         self.tab_diag_index = 2
         self.statusBar().showMessage("启动中 — 正在检查数据是否最新…")
@@ -315,11 +316,16 @@ class MainWindow(QtWidgets.QMainWindow):
         b_fav = QtWidgets.QPushButton("★ 收藏选中")
         b_fav.setToolTip("把选中的股票加入收藏")
         b_fav.clicked.connect(self.on_fav_from_tree)
+        b_track = QtWidgets.QPushButton("📌 开始观察选中")
+        b_track.setToolTip("按今天的收盘价登记观察记录，之后自动跟踪5/10/20/30日表现\n"
+                           "(事前记录、价格锁定，不可事后修改——这样积累的数据才可信)")
+        b_track.setStyleSheet("font-weight:bold;")
+        b_track.clicked.connect(self.on_track_from_tree)
         for wd in (QtWidgets.QLabel("筛选:"), self.sp_minscore, self.sp_topn,
                    QtWidgets.QLabel("方向:"), self.cb_mode,
                    QtWidgets.QLabel("同行超额门槛:"), self.sp_exc,
                    QtWidgets.QLabel("买入区范围:"), self.sp_zone,
-                   btn, b_exp, b_col, b_fav):
+                   btn, b_exp, b_col, b_fav, b_track):
             bar.addWidget(wd)
         bar.addStretch()
         self.lbl_scan = QtWidgets.QLabel("请先加载数据")
@@ -497,6 +503,174 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_fav()
         self.statusBar().showMessage(
             f"已收藏 {len(added)} 只: {', '.join(added)}" if added else "未选中股票(或已在收藏中)")
+
+    # ---------- 观察记录 ----------
+    def _tab_tracker(self):
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w)
+        bar = QtWidgets.QHBoxLayout()
+        b_ref = QtWidgets.QPushButton("刷新战绩")
+        b_ref.setStyleSheet("font-weight:bold; padding:6px 16px;")
+        b_ref.clicked.connect(self.on_tracker)
+        b_add = QtWidgets.QPushButton("＋ 手动登记"); b_add.clicked.connect(self.on_track_add)
+        b_del = QtWidgets.QPushButton("－ 删除选中"); b_del.clicked.connect(self.on_track_del)
+        for x in (b_ref, b_add, b_del):
+            bar.addWidget(x)
+        bar.addStretch()
+        self.lbl_track = QtWidgets.QLabel("")
+        self.lbl_track.setStyleSheet("font-size:13px; font-weight:bold;")
+        bar.addWidget(self.lbl_track)
+        lay.addLayout(bar)
+
+        note = QtWidgets.QLabel(
+            "📌 用法：在「每日领域榜」选中股票 → 点「开始观察选中」，按当日收盘价锁定记录。\n"
+            "之后每次刷新会自动算出持有收益、5/10/20/30日各节点表现，"
+            "并对比**日经同期**和**同行业同期**。\n"
+            "⚠ 三条纪律：① 事前登记不可事后补 ② 涨的跌的都要留(删掉亏的=自欺) "
+            "③ 单只30天说明不了问题——基准胜率54.6%，至少积累20~30条才有参考价值。")
+        note.setWordWrap(True)
+        note.setStyleSheet("background:#e7f5ff; padding:8px; border-radius:4px; font-size:12px;")
+        lay.addWidget(note)
+
+        self.tbl_track = QtWidgets.QTableWidget()
+        self.tbl_track.setColumnCount(12)
+        self.tbl_track.setHorizontalHeaderLabels(
+            ["登记日", "代码", "公司名", "登记价", "现价", "持有收益", "已过天数",
+             "日经同期", "超额", "5日", "10日", "30日"])
+        self.tbl_track.setAlternatingRowColors(True)
+        lay.addWidget(self.tbl_track)
+        self.txt_track = QtWidgets.QPlainTextEdit(readOnly=True)
+        self.txt_track.setStyleSheet("font-family: Consolas, monospace; font-size:12px;")
+        self.txt_track.setMaximumHeight(180)
+        lay.addWidget(self.txt_track)
+        return w
+
+    def on_track_from_tree(self):
+        """从领域榜登记观察"""
+        if self.prices is None:
+            return
+        import tracker
+        items = [it for it in self.tree_scr.selectedItems() if it.data(0, QtCore.Qt.UserRole)]
+        if not items:
+            QtWidgets.QMessageBox.information(self, "提示", "请先在榜单里选中一只或多只股票")
+            return
+        date = str(self.prices.index[-1].date())
+        added = []
+        for it in items:
+            tk = it.data(0, QtCore.Qt.UserRole)
+            try:
+                price = float(self.prices[tk].dropna().iloc[-1])
+            except Exception:
+                continue
+            # 连同当时的榜单信息一起存档,方便日后复盘"当初为什么选它"
+            meta = {"score": it.text(2), "excess20": it.text(7), "chg20": it.text(6),
+                    "sector": it.parent().text(0) if it.parent() else "",
+                    "in_zone": it.text(0).startswith("⭐")}
+            tracker.add_pick(tk, self.names.get(tk, ""), price, date, **meta)
+            added.append(tk)
+        self.on_tracker()
+        self.tabs.setCurrentIndex(4)
+        QtWidgets.QMessageBox.information(
+            self, "已登记",
+            f"已按 {date} 收盘价登记 {len(added)} 只观察记录:\n" + ", ".join(added)
+            + "\n\n之后每次打开程序刷新，会自动跟踪它们的表现。")
+
+    def on_track_add(self):
+        tk, ok = QtWidgets.QInputDialog.getText(self, "手动登记", "股票代码:")
+        if not ok or not tk.strip():
+            return
+        tk = self._to_ticker(tk)
+        if self.prices is None or tk not in self.prices.columns:
+            QtWidgets.QMessageBox.warning(self, "提示", f"股票池中没有 {tk}")
+            return
+        import tracker
+        price = float(self.prices[tk].dropna().iloc[-1])
+        tracker.add_pick(tk, self.names.get(tk, ""), price, str(self.prices.index[-1].date()))
+        self.on_tracker()
+
+    def on_track_del(self):
+        import tracker
+        rows = {i.row() for i in self.tbl_track.selectedItems()}
+        picks = tracker.load()
+        ids = [picks[i]["id"] for i in sorted(rows) if i < len(picks)]
+        if not ids:
+            return
+        if QtWidgets.QMessageBox.question(
+                self, "确认", f"删除 {len(ids)} 条记录？\n"
+                "⚠注意：只删亏损记录会让战绩失真，删除前想清楚。") != QtWidgets.QMessageBox.Yes:
+            return
+        for pid in ids:
+            tracker.remove(pid)
+        self.on_tracker()
+
+    def on_tracker(self):
+        if self.prices is None:
+            QtWidgets.QMessageBox.warning(self, "提示", "请先在「数据」页加载面板")
+            return
+        import tracker
+        picks = tracker.load()
+        if not picks:
+            self.lbl_track.setText("暂无记录")
+            self.tbl_track.setRowCount(0)
+            self.txt_track.setPlainText(
+                "还没有观察记录。\n\n"
+                "去「每日领域榜」选中想观察的股票 → 点「📌 开始观察选中」即可开始。")
+            return
+        # 基准需要日经数据(不在Prime池) → 按需补取
+        px = self.prices
+        if "^N225" not in px.columns:
+            extra = self._fetch_extra(["^N225"])
+            if "^N225" in extra:
+                px = px.join(extra["^N225"]["adjclose"].rename("^N225"), how="left")
+        rows = tracker.evaluate(picks, px, self.sector)
+        t = self.tbl_track
+        t.setRowCount(len(rows))
+
+        def _fmt(v, pct=True):
+            if v is None or v != v:
+                return "-"
+            return f"{v:+.1%}" if pct else f"{v:,.0f}"
+        for i, r in enumerate(rows):
+            vals = [r["date"], r["ticker"], r.get("name", ""),
+                    f"{r['price']:,.0f}", _fmt(r.get("current"), False),
+                    _fmt(r.get("ret")), str(r.get("days", "-")),
+                    _fmt(r.get("bench_ret")), _fmt(r.get("alpha")),
+                    _fmt(r.get("d5")), _fmt(r.get("d10")), _fmt(r.get("d30"))]
+            for j, v in enumerate(vals):
+                it = QtWidgets.QTableWidgetItem(str(v))
+                if j >= 3:
+                    it.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+                if j in (5, 8) and isinstance(v, str) and v not in ("-",):
+                    it.setForeground(QtCore.Qt.red if v.startswith("+") else QtCore.Qt.darkGreen)
+                t.setItem(i, j, it)
+        t.resizeColumnsToContents()
+
+        s = tracker.summary(rows)
+        n = s.get("n", 0)
+        self.lbl_track.setText(
+            f"共 {n} 条 | 胜率 {s.get('胜率', 0):.0%} | 平均 {s.get('平均收益', 0):+.1%} "
+            f"| 跑赢日经 {s.get('跑赢基准率', float('nan')):.0%}"
+            if n else "暂无有效记录")
+        L = ["══ 战绩汇总 ══",
+             f"  记录数      : {n}",
+             f"  胜率        : {s.get('胜率', float('nan')):.1%}   (全市场基准 54.6%)",
+             f"  平均收益    : {s.get('平均收益', float('nan')):+.2%}",
+             f"  中位收益    : {s.get('中位收益', float('nan')):+.2%}",
+             f"  跑赢日经比例: {s.get('跑赢基准率', float('nan')):.1%}",
+             f"  平均超额    : {s.get('平均超额', float('nan')):+.2%}   ← 这个才是真本事",
+             ""]
+        if s.get("满30日数"):
+            L += [f"  已满30日    : {s['满30日数']} 条   胜率 {s['满30日胜率']:.1%}   "
+                  f"平均 {s['满30日均收益']:+.2%}", ""]
+        if n < 20:
+            L.append(f"  ⚠ 样本仅{n}条，统计上说明不了任何问题。")
+            L.append(f"    基准胜率54.6%意味着：闭眼买{n}只，也有相当概率看起来'不错'。")
+            L.append("    坚持记满20~30条再看结论，中途不要因为几次涨跌改变判断。")
+        else:
+            L.append("  样本已达可参考量级。重点看「平均超额」——跑赢基准才是工具的价值，")
+            L.append("  单纯赚钱可能只是市场在涨。")
+        self.txt_track.setPlainText("\n".join(L))
+        self.statusBar().showMessage(f"观察记录: {n}条")
 
     # ---------- 我的持仓 ----------
     def _tab_portfolio(self):
