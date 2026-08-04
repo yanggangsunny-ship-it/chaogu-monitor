@@ -129,6 +129,7 @@ def diagnose(prices: pd.Series, volume: pd.Series, horizon: int = 20,
         "基准平均": float(base.mean()) if len(base) else np.nan,
     }
     return {"verdict": verdict, "note": note, "score": score, "total": TOTAL_SCORE,
+            "volume": volume, "vol20": volume.rolling(20, min_periods=10).mean(),
             "checks": row.to_dict(), "weights": CRITERIA_WEIGHTS, "detail": detail, "hist": stats,
             "date": today, "price": float(px), "series": prices,
             "ma": (ma5, ma20, ma60), "scores": scores, "horizon": horizon,

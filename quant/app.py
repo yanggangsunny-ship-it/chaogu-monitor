@@ -1126,12 +1126,23 @@ class MainWindow(QtWidgets.QMainWindow):
         ax.legend(fontsize=8); ax.grid(alpha=0.3)
         ax.set_title(f"{tk} 近两年走势 · 均线 · 支撑压力位")
         ax = axes[1]
-        sc = d["scores"].reindex(show)
-        ax.fill_between(show, 0, sc, color="#4dabf7", alpha=0.6, step="mid")
-        ax.axhline(d["strong_score"], color="#2f9e44", ls="--", lw=1.2, label=f"强势线({d['strong_score']}项)")
-        ax.axhline(4, color="#f08c00", ls="--", lw=1.0, label="整理线(4项)")
-        ax.set_ylim(0, 10); ax.legend(fontsize=8); ax.grid(alpha=0.3)
-        ax.set_title("趋势强度得分(0-10项) — 绿线以上=技术面强势状态")
+        vol = d.get("volume")
+        if vol is not None and len(vol.dropna()):
+            v = vol.reindex(show)
+            v20 = d["vol20"].reindex(show)
+            # 涨日红、跌日绿(与价格图对应)，一眼看出放量是在涨还是在跌
+            chg = px.reindex(show).diff()
+            colors = ["#e03131" if c >= 0 else "#2f9e44" for c in chg.fillna(0)]
+            unit, div = ("百万股", 1e6) if v.max() >= 1e6 else ("千股", 1e3)
+            ax.bar(show, v.values, color=colors, width=1.0, alpha=0.75)
+            ax.plot(show, v20.values, color="#1971c2", lw=1.2, label="20日均量")
+            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x / div:,.0f}"))
+            ax.set_ylabel(f"成交量({unit})")
+            ax.legend(fontsize=8)
+            ax.set_title("成交量 — 红=当日收涨 绿=收跌，蓝线=20日均量(高于它即放量)")
+        else:
+            ax.set_title("无成交量数据")
+        ax.grid(alpha=0.3)
         self.canvas_dx.draw()
         self.canvas_dx.save_home()      # 记住初始视图,供R键重置
         self.canvas_dx.setFocus()
