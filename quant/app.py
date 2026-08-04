@@ -256,16 +256,64 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tree_scr.itemClicked.connect(self._tree_hint)
         lay.addWidget(self.tree_scr)
 
-        risk = QtWidgets.QLabel(
-            "📊 回调风险实测 — 过去20天涨跌 → 之后20天上涨概率 (Prime全市场10年,含涨幅越大越危险的证据)\n"
-            "   跌>20%: 63.3%↑   跌10-20%: 57.3%↑   跌0-10%: 55.4%↑   涨0-10%: 53.9%↑\n"
-            "   涨10-20%: 52.5%↑   涨20-30%: 51.3%↑   涨30-50%: 51.1%↑   涨>50%: 46.4%↑ (跌的概率过半)\n"
-            "   → 榜上20日涨幅超20%的已用橙色标出。涨得越猛，后续胜率越低，这是10年数据的结论。")
-        risk.setWordWrap(True)
-        risk.setStyleSheet("background:#e7f5ff; padding:7px; border-radius:4px; font-size:12px;")
-        lay.addWidget(risk)
+        # 回调风险参考表(可折叠)
+        self.grp_risk = QtWidgets.QGroupBox("📊 回调风险实测：过去20天涨跌 → 之后20天的完整表现 (点标题折叠)")
+        self.grp_risk.setCheckable(True)
+        self.grp_risk.setChecked(True)
+        self.grp_risk.toggled.connect(lambda on: self.tbl_risk.setVisible(on))
+        rl = QtWidgets.QVBoxLayout(self.grp_risk)
+        self.tbl_risk = QtWidgets.QTableWidget()
+        self.tbl_risk.setMaximumHeight(240)
+        self._fill_risk_table()
+        rl.addWidget(self.tbl_risk)
+        note2 = QtWidgets.QLabel(
+            "读法：胜率高≠赚得多。「涨>50%」胜率最低(46.4%)但平均收益却排第二(+2.18%)——"
+            "因为它中位数是 -1.30%(多数在亏)，全靠少数暴涨拉高平均，是彩票型分布，"
+            "赢时+19.7%/输时-13.0%，波动极大。\n"
+            "「跌>20%」则是胜率(63.3%)、中位数(+4.34%)、平均(+5.15%)三项全优，分布健康。\n"
+            "⚠但「跌>20%」这档受生存者偏差影响最大：跌完之后退市/破产的公司不在数据里，"
+            "真实表现会比这个数字差。")
+        note2.setWordWrap(True)
+        note2.setStyleSheet("font-size:12px; color:#495057; padding:4px;")
+        rl.addWidget(note2)
+        lay.addWidget(self.grp_risk)
         lay.addWidget(QtWidgets.QLabel("双击任意股票 → 自动跳转到「个股趋势诊断」并显示完整数据"))
         return w
+
+    # 回调风险参考表(Prime全市场10年264万样本实测,静态结果)
+    RISK_TABLE = [
+        ("跌>20%", "63.3%", "+5.15%", "+4.34%", "+13.70%", "-9.60%", "1.43", "-18.4%", "+30.8%"),
+        ("跌10-20%", "57.3%", "+1.91%", "+1.62%", "+9.02%", "-7.63%", "1.18", "-15.8%", "+20.3%"),
+        ("跌0-10%", "55.4%", "+1.20%", "+0.96%", "+7.05%", "-6.06%", "1.16", "-12.7%", "+15.7%"),
+        ("涨0-10%", "53.9%", "+1.02%", "+0.71%", "+6.97%", "-5.93%", "1.18", "-12.4%", "+15.3%"),
+        ("涨10-20%", "52.5%", "+1.17%", "+0.56%", "+8.47%", "-6.90%", "1.23", "-14.6%", "+18.6%"),
+        ("涨20-30%", "51.3%", "+1.37%", "+0.39%", "+10.45%", "-8.19%", "1.28", "-17.2%", "+22.8%"),
+        ("涨30-50%", "51.1%", "+1.79%", "+0.38%", "+12.68%", "-9.58%", "1.32", "-19.3%", "+27.7%"),
+        ("涨>50%", "46.4%", "+2.18%", "-1.30%", "+19.66%", "-12.97%", "1.52", "-26.8%", "+43.1%"),
+        ("— 全样本 —", "54.6%", "+1.26%", "+0.87%", "", "", "", "", ""),
+    ]
+
+    def _fill_risk_table(self):
+        heads = ["过去20天", "上涨概率", "平均收益", "中位数", "赢时均涨", "输时均跌",
+                 "盈亏比", "最差5%", "最好5%"]
+        t = self.tbl_risk
+        t.setColumnCount(len(heads)); t.setRowCount(len(self.RISK_TABLE))
+        t.setHorizontalHeaderLabels(heads)
+        t.verticalHeader().setVisible(False)
+        for i, row in enumerate(self.RISK_TABLE):
+            for j, v in enumerate(row):
+                it = QtWidgets.QTableWidgetItem(v)
+                if j > 0:
+                    it.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+                if row[0] == "— 全样本 —":
+                    f = it.font(); f.setItalic(True); it.setFont(f)
+                elif j == 3 and v.startswith("-"):      # 中位数为负=多数样本在亏
+                    it.setForeground(QtCore.Qt.red)
+                    f = it.font(); f.setBold(True); it.setFont(f)
+                elif j == 1 and float(v.rstrip("%")) < 50:
+                    it.setForeground(QtCore.Qt.red)
+                t.setItem(i, j, it)
+        t.resizeColumnsToContents()
 
     def on_scan(self):
         if self.prices is None:
