@@ -88,13 +88,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker = None
 
         tabs = QtWidgets.QTabWidget()
+        self.tabs = tabs
         tabs.addTab(self._tab_data(), "① 数据")
-        tabs.addTab(self._tab_diagnosis(), "② 个股趋势诊断 ★")
-        tabs.addTab(self._tab_backtest(), "③ 因子回测(研究用)")
-        tabs.addTab(self._tab_signal(), "④ 信号点位")
-        tabs.addTab(self._tab_log(), "⑤ 试验登记册")
+        tabs.addTab(self._tab_screener(), "② 每日领域榜 ★")
+        tabs.addTab(self._tab_diagnosis(), "③ 个股趋势诊断")
+        tabs.addTab(self._tab_backtest(), "④ 因子回测(研究用)")
+        tabs.addTab(self._tab_signal(), "⑤ 信号点位")
+        tabs.addTab(self._tab_log(), "⑥ 试验登记册")
         self.setCentralWidget(tabs)
-        self.statusBar().showMessage("就绪 — 请先在「数据」页加载面板")
+        self.tab_diag_index = 2
+        self.statusBar().showMessage("启动中 — 正在检查数据是否最新…")
+        QtCore.QTimer.singleShot(300, self.auto_startup)   # 界面显示后再检查,不阻塞启动
 
     # ---------- 数据页 ----------
     def _tab_data(self):
@@ -129,11 +133,30 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.addWidget(self.txt_data)
         return w
 
-    def on_load(self):
+    def auto_startup(self):
+        """启动时自动检查数据新鲜度：已是最新→直接读缓存；过期或缺失→自动下载"""
+        from data import panel_status
+        mk, yr = self.cb_market.currentText(), self.sp_years.value()
+        st = panel_status(mk, yr)
+        if not st["exists"]:
+            msg = "首次运行，正在下载数据(约1分钟)…"
+        elif not st["fresh"]:
+            latest = st["latest"].date() if st["latest"] is not None else "?"
+            msg = f"数据仅到 {latest}，应有 {st['expected'].date()} → 自动更新中…"
+        else:
+            msg = f"数据已是最新({st['latest'].date()})，直接加载…"
+        self.statusBar().showMessage(msg)
+        self.txt_data.appendPlainText(f"\n[启动检查] {msg}")
+        self.on_load(auto=True)
+
+    def on_load(self, auto: bool = False):
         self.btn_load.setEnabled(False)
-        self.statusBar().showMessage("下载/加载中…")
-        mk, yr, rf = self.cb_market.currentText(), self.sp_years.value(), self.chk_refresh.isChecked()
-        self.worker = Worker(build_panel, market=mk, years=yr, refresh=rf)
+        if not auto:
+            self.statusBar().showMessage("下载/加载中…")
+        mk, yr = self.cb_market.currentText(), self.sp_years.value()
+        rf = self.chk_refresh.isChecked() and not auto
+        self.worker = Worker(build_panel, market=mk, years=yr, refresh=rf,
+                             auto_refresh=auto)
         self.worker.done.connect(self._loaded)
         self.worker.failed.connect(self._err)
         self.worker.start()
@@ -164,13 +187,129 @@ class MainWindow(QtWidgets.QMainWindow):
             f"\n流动性过滤后日均可交易 {self.mask.sum(axis=1).mean():.0f}只"
             f" | 中性化数据: {'就绪' if self.sector is not None else '不可用'}")
         self.btn_load.setEnabled(True)
-        self.statusBar().showMessage("面板加载完成")
+        self.statusBar().showMessage(
+            f"数据就绪 (最新 {self.prices.index[-1].date()}) — 可到「每日领域榜」扫描")
+        if self.tabs.currentIndex() == 0:   # 启动后自动跳到领域榜并扫描
+            self.tabs.setCurrentIndex(1)
+            QtCore.QTimer.singleShot(200, self.on_scan)
 
     def _err(self, tb):
         self.btn_load.setEnabled(True)
         self.btn_run.setEnabled(True)
         QtWidgets.QMessageBox.critical(self, "出错", tb[-1500:])
         self.statusBar().showMessage("出错")
+
+    # ---------- 每日领域榜 ----------
+    def _tab_screener(self):
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w)
+        bar = QtWidgets.QHBoxLayout()
+        self.sp_minscore = QtWidgets.QSpinBox(); self.sp_minscore.setRange(1, 10); self.sp_minscore.setValue(8)
+        self.sp_minscore.setSuffix(" 分以上")
+        self.sp_topn = QtWidgets.QSpinBox(); self.sp_topn.setRange(1, 10); self.sp_topn.setValue(3)
+        self.sp_topn.setSuffix(" 只/领域")
+        btn = QtWidgets.QPushButton("扫描今日")
+        btn.setStyleSheet("font-weight:bold; padding:6px 18px;")
+        btn.clicked.connect(self.on_scan)
+        b_exp = QtWidgets.QPushButton("全部展开"); b_exp.clicked.connect(lambda: self.tree_scr.expandAll())
+        b_col = QtWidgets.QPushButton("全部折叠"); b_col.clicked.connect(lambda: self.tree_scr.collapseAll())
+        b_fav = QtWidgets.QPushButton("★ 收藏选中")
+        b_fav.setToolTip("把选中的股票加入收藏")
+        b_fav.clicked.connect(self.on_fav_from_tree)
+        for wd in (QtWidgets.QLabel("筛选:"), self.sp_minscore, self.sp_topn, btn, b_exp, b_col, b_fav):
+            bar.addWidget(wd)
+        bar.addStretch()
+        self.lbl_scan = QtWidgets.QLabel("请先加载数据")
+        bar.addWidget(self.lbl_scan)
+        lay.addLayout(bar)
+
+        note = QtWidgets.QLabel(
+            "⚠这个得分= 诊断页那10项判据的合计，已验证**无预测力甚至反向**"
+            "(得分高者后20日胜率52.9% < 随机买入54.6%, t=-3.88)。\n"
+            "→ 本榜只回答「今天哪些股票技术面处于强势状态」，不是买入建议。"
+            "同行超额收益那一列是客观的相对强弱，参考价值更高。")
+        note.setWordWrap(True)
+        note.setStyleSheet("background:#fff3bf; padding:7px; border-radius:4px; font-size:12px;")
+        lay.addWidget(note)
+
+        self.tree_scr = QtWidgets.QTreeWidget()
+        self.tree_scr.setColumnCount(7)
+        self.tree_scr.setHeaderLabels(["领域 / 股票", "得分", "现价", "20日涨幅",
+                                       "同行超额", "60日涨幅", "公司名"])
+        self.tree_scr.setAlternatingRowColors(True)
+        self.tree_scr.itemDoubleClicked.connect(self.on_tree_pick)
+        self.tree_scr.itemClicked.connect(self._tree_hint)
+        lay.addWidget(self.tree_scr)
+        lay.addWidget(QtWidgets.QLabel("双击任意股票 → 自动跳转到「个股趋势诊断」并显示完整数据"))
+        return w
+
+    def on_scan(self):
+        if self.prices is None:
+            QtWidgets.QMessageBox.warning(self, "提示", "请先在「数据」页加载面板")
+            return
+        self.lbl_scan.setText("扫描中…")
+        QtWidgets.QApplication.processEvents()
+        try:
+            from screener import scan, scan_summary
+            vol = to_wide(self.panel, "volume", scrub=False)
+            res = scan(self.prices, vol, min_score=self.sp_minscore.value(),
+                       top_n=self.sp_topn.value(), market=self.cb_market.currentText())
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "扫描失败", traceback.format_exc()[-1200:])
+            self.lbl_scan.setText("扫描失败")
+            return
+
+        self.tree_scr.clear()
+        for sector, rows in res.items():
+            top = QtWidgets.QTreeWidgetItem([f"【{sector}】", "", "", "", "",
+                                             "", f"{len(rows)}只入选"])
+            f = top.font(0); f.setBold(True); top.setFont(0, f)
+            top.setBackground(0, QtCore.Qt.lightGray)
+            for r in rows:
+                nm = getattr(self, "names", {}).get(r["ticker"], "")
+                child = QtWidgets.QTreeWidgetItem([
+                    r["ticker"], f"{r['score']}分", f"{r['price']:,.0f}",
+                    f"{r['chg20']:+.1%}", f"{r['excess20']:+.1%}", f"{r['chg60']:+.1%}", nm])
+                child.setData(0, QtCore.Qt.UserRole, r["ticker"])
+                # 超额为正标红(相对同行强)，为负标绿
+                child.setForeground(4, QtCore.Qt.red if r["excess20"] > 0 else QtCore.Qt.darkGreen)
+                top.addChild(child)
+            if not rows:
+                top.addChild(QtWidgets.QTreeWidgetItem(["(无符合条件的股票)"]))
+            self.tree_scr.addTopLevelItem(top)
+        self.tree_scr.expandAll()
+        for i in range(7):
+            self.tree_scr.resizeColumnToContents(i)
+        d = self.prices.index[-1].date()
+        self.lbl_scan.setText(f"数据日期 {d} — {scan_summary(res)}")
+        self.statusBar().showMessage(f"扫描完成: {scan_summary(res)}")
+
+    def _tree_hint(self, item, col):
+        tk = item.data(0, QtCore.Qt.UserRole)
+        if tk:
+            self.statusBar().showMessage(f"{self._label(tk)} — 双击查看完整诊断")
+
+    def on_tree_pick(self, item, col):
+        tk = item.data(0, QtCore.Qt.UserRole)
+        if not tk:
+            item.setExpanded(not item.isExpanded())   # 双击领域行=折叠/展开
+            return
+        self.cb_dx.setCurrentText(self._label(tk))
+        self.tabs.setCurrentIndex(self.tab_diag_index)
+        self.on_diagnose()
+
+    def on_fav_from_tree(self):
+        import watchlist
+        items = self.tree_scr.selectedItems()
+        added = []
+        for it in items:
+            tk = it.data(0, QtCore.Qt.UserRole)
+            if tk and not watchlist.contains(tk):
+                watchlist.add(tk)
+                added.append(tk)
+        self._refresh_fav()
+        self.statusBar().showMessage(
+            f"已收藏 {len(added)} 只: {', '.join(added)}" if added else "未选中股票(或已在收藏中)")
 
     # ---------- 个股趋势诊断页 ----------
     def _tab_diagnosis(self):

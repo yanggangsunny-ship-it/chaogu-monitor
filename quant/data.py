@@ -65,10 +65,44 @@ def _fetch_one(session: requests.Session, ticker: str, years: int, retries: int 
     return None
 
 
-def build_panel(market: str = "prime", years: int = 10, workers: int = 8,
-                refresh: bool = False, limit: int | None = None) -> pd.DataFrame:
-    """构建面板并缓存。返回长表(date,ticker,ohlcv,adjclose)"""
+def last_trading_day(now: datetime | None = None) -> "pd.Timestamp":
+    """东证最近一个应有数据的交易日(JST)。收盘15:30后算当天，否则算上一个工作日。
+    不含日本节假日——只用于粗判缓存是否过期，宁可多刷一次也不漏"""
+    now = now or datetime.now(JST)
+    d = now.date()
+    if now.hour * 60 + now.minute < 15 * 60 + 40:   # 今日尚未收盘
+        d -= timedelta(days=1)
+    while d.weekday() >= 5:                          # 回退到最近工作日
+        d -= timedelta(days=1)
+    return pd.Timestamp(d)
+
+
+def panel_status(market: str = "prime", years: int = 10) -> dict:
+    """检查缓存新鲜度。返回 {exists, latest, expected, fresh}"""
     cache = _PANEL_CACHE.format(market=market, years=years)
+    exp = last_trading_day()
+    if not os.path.exists(cache):
+        return {"exists": False, "latest": None, "expected": exp, "fresh": False}
+    try:
+        latest = pd.read_parquet(cache, columns=["date"])["date"].max()
+        latest = pd.Timestamp(latest).normalize()
+    except Exception:
+        return {"exists": True, "latest": None, "expected": exp, "fresh": False}
+    return {"exists": True, "latest": latest, "expected": exp, "fresh": latest >= exp}
+
+
+def build_panel(market: str = "prime", years: int = 10, workers: int = 8,
+                refresh: bool = False, limit: int | None = None,
+                auto_refresh: bool = False) -> pd.DataFrame:
+    """构建面板并缓存。返回长表(date,ticker,ohlcv,adjclose)。
+    auto_refresh=True 时，缓存数据不是最新交易日的就自动重新下载"""
+    cache = _PANEL_CACHE.format(market=market, years=years)
+    if auto_refresh and not refresh:
+        st = panel_status(market, years)
+        if st["exists"] and not st["fresh"]:
+            print(f"[面板] 缓存最新到 {st['latest'].date() if st['latest'] is not None else '?'}，"
+                  f"应有 {st['expected'].date()} → 自动更新")
+            refresh = True
     if not refresh and os.path.exists(cache):
         return pd.read_parquet(cache)
 
