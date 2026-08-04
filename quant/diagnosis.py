@@ -42,16 +42,20 @@ def build_checks(prices: pd.Series, volume: pd.Series) -> pd.DataFrame:
 
 
 def verdict_from_score(score: int, total: int = 10) -> tuple[str, str]:
-    """得分 → 结论 + 说明"""
+    """得分 → **状态描述**(不是预测)。
+    ⚠2026-08-04全市场验证(98万样本): 得分高的股票后20日胜率52.9%,
+      低于随机买入的54.6%(t=-3.88)。这10项判据在日股**没有预测力甚至反向**
+      (日股是反转市场,而这些判据全是动量变体)。措辞已从"上升趋势确立"改为
+      纯状态描述，不再暗示未来方向。"""
     if score >= 8:
-        return "上升趋势确立", "多项指标同向向上，趋势明确"
+        return "技术面强势(状态)", "多项指标处于强势区间 — 描述现状,不预示后市"
     if score >= 6:
-        return "偏强/趋势形成中", "多数指标转好，但尚未全面确认"
+        return "技术面偏强(状态)", "多数指标偏强 — 描述现状,不预示后市"
     if score >= 4:
-        return "横盘整理", "多空指标交织，方向未明"
+        return "多空交织(状态)", "指标分歧,无明确方向"
     if score >= 2:
-        return "偏弱", "多数指标向下，反弹需确认"
-    return "下降趋势", "指标全面向下，不宜逆势"
+        return "技术面偏弱(状态)", "多数指标偏弱 — 描述现状,不预示后市"
+    return "技术面弱势(状态)", "指标全面走弱 — 描述现状,不预示后市"
 
 
 def diagnose(prices: pd.Series, volume: pd.Series, horizon: int = 20,

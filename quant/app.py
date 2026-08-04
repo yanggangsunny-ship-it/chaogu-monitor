@@ -147,10 +147,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self.size = build_size_factor(self.prices)
         except Exception:
             self.sector = self.size = None
-        self.cb_ticker.clear()
-        self.cb_ticker.addItems(list(self.prices.columns))
-        self.cb_dx.clear()
-        self.cb_dx.addItems(list(self.prices.columns))
+        # ticker → 日文公司名 (JPX官方名录)
+        try:
+            from universe import load_universe
+            u = load_universe((self.cb_market.currentText(),))
+            self.names = dict(zip(u["ticker"], u["name"]))
+        except Exception:
+            self.names = {}
+        labels = [self._label(t) for t in self.prices.columns]
+        self.cb_ticker.clear(); self.cb_ticker.addItems(labels)
+        self.cb_dx.clear(); self.cb_dx.addItems(labels)
+        self._refresh_fav()
         self.txt_data.appendPlainText(
             f"\n[已加载] {self.prices.shape[1]}只 × {self.prices.shape[0]}交易日 "
             f"| {self.prices.index.min().date()} ~ {self.prices.index.max().date()}"
@@ -170,15 +177,25 @@ class MainWindow(QtWidgets.QMainWindow):
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(w)
         bar = QtWidgets.QHBoxLayout()
-        self.cb_dx = QtWidgets.QComboBox(); self.cb_dx.setEditable(True); self.cb_dx.setMinimumWidth(160)
+        self.cb_dx = QtWidgets.QComboBox(); self.cb_dx.setEditable(True); self.cb_dx.setMinimumWidth(300)
+        self.cb_dx.setInsertPolicy(QtWidgets.QComboBox.NoInsert)
         self.sp_dx_h = QtWidgets.QSpinBox(); self.sp_dx_h.setRange(1, 120); self.sp_dx_h.setValue(20)
         self.sp_dx_h.setSuffix(" 日")
         btn = QtWidgets.QPushButton("诊断这只股票")
         btn.setStyleSheet("font-weight:bold; padding:6px 18px;")
         btn.clicked.connect(self.on_diagnose)
-        bar.addWidget(QtWidgets.QLabel("股票代码:")); bar.addWidget(self.cb_dx)
+        self.btn_fav = QtWidgets.QPushButton("☆ 收藏")
+        self.btn_fav.setToolTip("加入/移出收藏，收藏保存在程序目录 watchlist.json")
+        self.btn_fav.clicked.connect(self.on_toggle_fav)
+        self.cb_fav = QtWidgets.QComboBox(); self.cb_fav.setMinimumWidth(260)
+        self.cb_fav.setToolTip("收藏的股票，选中即诊断")
+        self.cb_fav.activated.connect(self.on_pick_fav)
+        bar.addWidget(QtWidgets.QLabel("股票:")); bar.addWidget(self.cb_dx)
         bar.addWidget(QtWidgets.QLabel("看未来:")); bar.addWidget(self.sp_dx_h)
-        bar.addWidget(btn); bar.addStretch()
+        bar.addWidget(btn); bar.addWidget(self.btn_fav)
+        bar.addSpacing(16)
+        bar.addWidget(QtWidgets.QLabel("★收藏:")); bar.addWidget(self.cb_fav)
+        bar.addStretch()
         lay.addLayout(bar)
 
         self.lbl_verdict = QtWidgets.QLabel("请先加载数据，再选一只股票诊断")
@@ -187,16 +204,37 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.addWidget(self.lbl_verdict)
 
         split = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
-        left = QtWidgets.QWidget(); ll = QtWidgets.QVBoxLayout(left)
-        ll.addWidget(QtWidgets.QLabel("判断清单(每条都可自己复核):"))
+        left = QtWidgets.QTabWidget()
+        # -- 判断清单
+        p1 = QtWidgets.QWidget(); l1 = QtWidgets.QVBoxLayout(p1)
+        warn = QtWidgets.QLabel(
+            "⚠这10项判据经全市场98万样本验证：得分高的股票后20日胜率52.9%，"
+            "低于随机买入54.6%(t=-3.88)。日股是反转市场，这些动量类判据无预测力。\n"
+            "→ 只能当「现状描述」看，不要当买入信号。")
+        warn.setWordWrap(True)
+        warn.setStyleSheet("background:#fff3bf; padding:8px; border-radius:4px; font-size:12px;")
+        l1.addWidget(warn)
         self.tbl_dx = QtWidgets.QTableWidget()
         self.tbl_dx.setColumnCount(3)
         self.tbl_dx.setHorizontalHeaderLabels(["", "判据", "实际数值"])
-        ll.addWidget(self.tbl_dx)
+        l1.addWidget(self.tbl_dx)
         self.txt_dx = QtWidgets.QPlainTextEdit(readOnly=True)
         self.txt_dx.setStyleSheet("font-family: Consolas, monospace; font-size:12px;")
-        self.txt_dx.setMaximumHeight(190)
-        ll.addWidget(self.txt_dx)
+        self.txt_dx.setMaximumHeight(170)
+        l1.addWidget(self.txt_dx)
+        left.addTab(p1, "判断清单")
+        # -- 关键价位
+        p2 = QtWidgets.QWidget(); l2 = QtWidgets.QVBoxLayout(p2)
+        self.txt_lv = QtWidgets.QPlainTextEdit(readOnly=True)
+        self.txt_lv.setStyleSheet("font-family: Consolas, monospace; font-size:12px;")
+        l2.addWidget(self.txt_lv)
+        left.addTab(p2, "支撑/压力/买卖位")
+        # -- 行业对比
+        p3 = QtWidgets.QWidget(); l3 = QtWidgets.QVBoxLayout(p3)
+        self.txt_sec = QtWidgets.QPlainTextEdit(readOnly=True)
+        self.txt_sec.setStyleSheet("font-family: Consolas, monospace; font-size:12px;")
+        l3.addWidget(self.txt_sec)
+        left.addTab(p3, "行业内对比")
         split.addWidget(left)
 
         right = QtWidgets.QWidget(); rl = QtWidgets.QVBoxLayout(right)
@@ -211,12 +249,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.panel is None:
             QtWidgets.QMessageBox.warning(self, "提示", "请先在「数据」页加载面板")
             return
-        tk = self.cb_dx.currentText().strip()
-        if not tk.endswith(".T") and tk.isdigit():
-            tk += ".T"
+        tk = self._to_ticker(self.cb_dx.currentText())
         if tk not in self.prices.columns:
             QtWidgets.QMessageBox.warning(self, "提示", f"股票池中没有 {tk}")
             return
+        self._sync_fav_button(tk)
         from diagnosis import diagnose
         vol = to_wide(self.panel, "volume")
         d = diagnose(self.prices[tk], vol[tk], horizon=self.sp_dx_h.value())
@@ -229,8 +266,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_verdict.setStyleSheet(
             f"font-size:19px; font-weight:bold; padding:12px; color:white; "
             f"background:{color}; border-radius:6px;")
+        nm = getattr(self, "names", {}).get(tk, "")
         self.lbl_verdict.setText(
-            f"{tk}   【{d['verdict']}】   {d['score']}/{d['total']} 项达标   "
+            f"{tk} {nm}   【{d['verdict']}】   {d['score']}/{d['total']} 项达标   "
             f"现价 {d['price']:,.0f}円   ({d['note']})")
 
         self.tbl_dx.setRowCount(len(d["checks"]))
@@ -259,6 +297,10 @@ class MainWindow(QtWidgets.QMainWindow):
         ]
         self.txt_dx.setPlainText("\n".join(x for x in lines if x != ""))
 
+        # 关键价位 + 行业对比
+        lv = self._fill_levels(tk)
+        self._fill_sector(tk)
+
         axes = self.canvas_dx.clear(2, 1)
         ax = axes[0]
         px, (ma5, ma20, ma60) = d["series"], d["ma"]
@@ -266,8 +308,17 @@ class MainWindow(QtWidgets.QMainWindow):
         ax.plot(show, px.reindex(show), lw=1.2, color="#212529", label="复权价")
         ax.plot(show, ma20.reindex(show), lw=1.0, color="#1971c2", label="MA20")
         ax.plot(show, ma60.reindex(show), lw=1.0, color="#e8590c", label="MA60")
+        if lv:
+            for x in lv["resistance"][:3]:
+                ax.axhline(x["price"], color="#c92a2a", ls="--", lw=0.9, alpha=0.75)
+                ax.annotate(f"压力 {x['price']:,.0f}", (show[-1], x["price"]), fontsize=7,
+                            color="#c92a2a", xytext=(4, 0), textcoords="offset points", va="center")
+            for x in lv["support"][:3]:
+                ax.axhline(x["price"], color="#2f9e44", ls="--", lw=0.9, alpha=0.75)
+                ax.annotate(f"支撑 {x['price']:,.0f}", (show[-1], x["price"]), fontsize=7,
+                            color="#2f9e44", xytext=(4, 0), textcoords="offset points", va="center")
         ax.legend(fontsize=8); ax.grid(alpha=0.3)
-        ax.set_title(f"{tk} 近两年走势与均线")
+        ax.set_title(f"{tk} 近两年走势 · 均线 · 支撑压力位")
         ax = axes[1]
         sc = d["scores"].reindex(show)
         ax.fill_between(show, 0, sc, color="#4dabf7", alpha=0.6, step="mid")
@@ -277,6 +328,126 @@ class MainWindow(QtWidgets.QMainWindow):
         ax.set_title("趋势强度得分(0-10项) — 绿线以上=上升趋势")
         self.canvas_dx.draw()
         self.statusBar().showMessage(f"{tk} 诊断完成: {d['verdict']}")
+
+    # ---------- 股票名 / 收藏 ----------
+    def _label(self, ticker: str) -> str:
+        """下拉显示: 7011.T  三菱重工業"""
+        nm = getattr(self, "names", {}).get(ticker, "")
+        return f"{ticker}  {nm}" if nm else ticker
+
+    @staticmethod
+    def _to_ticker(text: str) -> str:
+        """从 '7011.T  三菱重工業' 或 '7011' 反解出 ticker"""
+        t = (text or "").strip().split()[0] if text.strip() else ""
+        if t and not t.endswith(".T") and t.replace("A", "").isdigit():
+            t += ".T"
+        return t
+
+    def _refresh_fav(self):
+        import watchlist
+        favs = watchlist.load()
+        self.cb_fav.blockSignals(True)
+        self.cb_fav.clear()
+        self.cb_fav.addItem(f"— 共{len(favs)}只 —")
+        for t in favs:
+            self.cb_fav.addItem(self._label(t), t)
+        self.cb_fav.blockSignals(False)
+
+    def on_toggle_fav(self):
+        import watchlist
+        tk = self._to_ticker(self.cb_dx.currentText())
+        if not tk:
+            return
+        if watchlist.contains(tk):
+            watchlist.remove(tk)
+            self.statusBar().showMessage(f"已从收藏移除 {tk}")
+        else:
+            watchlist.add(tk)
+            self.statusBar().showMessage(f"已收藏 {self._label(tk)}")
+        self._refresh_fav()
+        self._sync_fav_button(tk)
+
+    def _sync_fav_button(self, tk: str):
+        import watchlist
+        on = watchlist.contains(tk)
+        self.btn_fav.setText("★ 已收藏" if on else "☆ 收藏")
+        self.btn_fav.setStyleSheet("color:#f08c00; font-weight:bold;" if on else "")
+
+    def on_pick_fav(self, idx: int):
+        tk = self.cb_fav.itemData(idx)
+        if not tk:
+            return
+        self.cb_dx.setCurrentText(self._label(tk))
+        self.on_diagnose()
+
+    def _fill_levels(self, tk):
+        """计算并显示支撑/压力/参考买卖位"""
+        try:
+            from levels import trade_levels
+            hi = to_wide(self.panel, "high")[tk].dropna()
+            lo = to_wide(self.panel, "low")[tk].dropna()
+            cl = self.prices[tk].dropna()
+            vo = to_wide(self.panel, "volume", scrub=False)[tk].dropna()
+            r = trade_levels(hi, lo, cl, vo)
+        except Exception as e:
+            self.txt_lv.setPlainText(f"价位计算失败: {e}")
+            return None
+        L = [f"现价 {r['price']:,.0f}円   ATR(14) {r['atr']:,.0f}円 (日均波动 {r['atr'] / r['price']:.1%})",
+             f"筹码密集价(POC) {r['poc']:,.0f}円" if r["poc"] == r["poc"] else "", "",
+             "── 压力位(上方) ──"]
+        for x in r["resistance"]:
+            hold = f"{x['held']}/{x['tested']}" if x["tested"] else "-"
+            L.append(f"  {x['price']:>9,.0f}  ({x['dist_pct']:+5.1f}%)  历史守住 {hold}"
+                     + ("  ★筹码密集" if x["is_poc"] else ""))
+        L += ["", "── 支撑位(下方) ──"]
+        for x in r["support"]:
+            hold = f"{x['held']}/{x['tested']}" if x["tested"] else "-"
+            L.append(f"  {x['price']:>9,.0f}  ({x['dist_pct']:+5.1f}%)  历史守住 {hold}"
+                     + ("  ★筹码密集" if x["is_poc"] else ""))
+        L += ["", "── 机械参考位(算法输出,非建议) ──",
+              f"  买入参考: {r['entry']:,.0f}   (最近支撑上方0.5%)",
+              f"  止损位  : {r['stop']:,.0f}   ({r['stop_pct']:+.1f}%, 支撑下方2倍ATR)",
+              f"  目标位  : {r['target']:,.0f}   ({r['target_pct']:+.1f}%, 最近压力)",
+              f"  盈亏比  : {r['risk_reward']:.2f}" if r["risk_reward"] == r["risk_reward"] else "",
+              "",
+              "「历史守住 x/y」= 价格曾y次接近该位,其中x次未被有效突破。",
+              "y次数少或x/y比例低的线不可靠。盈亏比<1表示风险大于潜在收益。",
+              "⚠支撑压力是经验规律不是定律,机械参考位仅为算法输出,不构成建议。"]
+        self.txt_lv.setPlainText("\n".join(x for x in L if x != ""))
+        return r
+
+    def _fill_sector(self, tk):
+        """行业内相对表现"""
+        try:
+            from sector_rel import peer_snapshot
+            if self.sector is None:
+                self.txt_sec.setPlainText("行业数据不可用")
+                return
+            ps = peer_snapshot(self.prices, self.sector, tk)
+        except Exception as e:
+            self.txt_sec.setPlainText(f"行业对比失败: {e}")
+            return
+        if "error" in ps:
+            self.txt_sec.setPlainText(ps["error"])
+            return
+        n = ps["n_peers"]
+        L = [f"所属行业: {ps['sector']}   同业 {n} 只", ""]
+        L.append(f"{'周期':<10}{'本股':>10}{'行业中位':>10}{'超额':>10}{'行业排名':>12}")
+        L.append("-" * 54)
+        for c in ps["table"].columns:
+            s = ps["self"][c] if ps["self"] is not None else float("nan")
+            m = ps["sector_median"][c]
+            rk = ps["ranks"].get(c)
+            L.append(f"{c:<10}{s:>+10.1%}{m:>+10.1%}{s - m:>+10.1%}"
+                     + (f"{f'第{rk}/{n}':>12}" if rk else f"{'-':>12}"))
+        L += ["", "── 行业内近60日领先者 ──"]
+        for t, row in ps["leaders"].iterrows():
+            mark = " ←本股" if t == tk else ""
+            nm = getattr(self, "names", {}).get(t, "")
+            L.append(f"  {t:<9}{row.get('60日涨幅', float('nan')):+8.1%}  {nm}{mark}")
+        L += ["", "超额>0 = 跑赢同行(个股自身因素占优); 超额<0 = 跑输同行。",
+              "这剥离了板块β,比看绝对涨跌更能说明这只股票本身强弱。"]
+        self.txt_sec.setPlainText("\n".join(L))
 
     # ---------- 回测页 ----------
     def _tab_backtest(self):
@@ -434,7 +605,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.prices is None:
             QtWidgets.QMessageBox.warning(self, "提示", "请先加载面板")
             return
-        tk = self.cb_ticker.currentText().strip()
+        tk = self._to_ticker(self.cb_ticker.currentText())
         if tk not in self.prices.columns:
             QtWidgets.QMessageBox.warning(self, "提示", f"股票池中没有 {tk}")
             return

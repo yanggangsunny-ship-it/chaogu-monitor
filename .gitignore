@@ -15,3 +15,4 @@ quant/output/
 quant/build/
 quant/dist/
 quant/__pycache__/
+quant/watchlist.json
