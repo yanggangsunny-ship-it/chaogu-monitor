@@ -89,9 +89,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         tabs = QtWidgets.QTabWidget()
         tabs.addTab(self._tab_data(), "① 数据")
-        tabs.addTab(self._tab_backtest(), "② 因子回测")
-        tabs.addTab(self._tab_signal(), "③ 信号点位")
-        tabs.addTab(self._tab_log(), "④ 试验登记册")
+        tabs.addTab(self._tab_diagnosis(), "② 个股趋势诊断 ★")
+        tabs.addTab(self._tab_backtest(), "③ 因子回测(研究用)")
+        tabs.addTab(self._tab_signal(), "④ 信号点位")
+        tabs.addTab(self._tab_log(), "⑤ 试验登记册")
         self.setCentralWidget(tabs)
         self.statusBar().showMessage("就绪 — 请先在「数据」页加载面板")
 
@@ -148,6 +149,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.sector = self.size = None
         self.cb_ticker.clear()
         self.cb_ticker.addItems(list(self.prices.columns))
+        self.cb_dx.clear()
+        self.cb_dx.addItems(list(self.prices.columns))
         self.txt_data.appendPlainText(
             f"\n[已加载] {self.prices.shape[1]}只 × {self.prices.shape[0]}交易日 "
             f"| {self.prices.index.min().date()} ~ {self.prices.index.max().date()}"
@@ -161,6 +164,119 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_run.setEnabled(True)
         QtWidgets.QMessageBox.critical(self, "出错", tb[-1500:])
         self.statusBar().showMessage("出错")
+
+    # ---------- 个股趋势诊断页 ----------
+    def _tab_diagnosis(self):
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w)
+        bar = QtWidgets.QHBoxLayout()
+        self.cb_dx = QtWidgets.QComboBox(); self.cb_dx.setEditable(True); self.cb_dx.setMinimumWidth(160)
+        self.sp_dx_h = QtWidgets.QSpinBox(); self.sp_dx_h.setRange(1, 120); self.sp_dx_h.setValue(20)
+        self.sp_dx_h.setSuffix(" 日")
+        btn = QtWidgets.QPushButton("诊断这只股票")
+        btn.setStyleSheet("font-weight:bold; padding:6px 18px;")
+        btn.clicked.connect(self.on_diagnose)
+        bar.addWidget(QtWidgets.QLabel("股票代码:")); bar.addWidget(self.cb_dx)
+        bar.addWidget(QtWidgets.QLabel("看未来:")); bar.addWidget(self.sp_dx_h)
+        bar.addWidget(btn); bar.addStretch()
+        lay.addLayout(bar)
+
+        self.lbl_verdict = QtWidgets.QLabel("请先加载数据，再选一只股票诊断")
+        self.lbl_verdict.setStyleSheet(
+            "font-size:19px; font-weight:bold; padding:12px; background:#f1f3f5; border-radius:6px;")
+        lay.addWidget(self.lbl_verdict)
+
+        split = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        left = QtWidgets.QWidget(); ll = QtWidgets.QVBoxLayout(left)
+        ll.addWidget(QtWidgets.QLabel("判断清单(每条都可自己复核):"))
+        self.tbl_dx = QtWidgets.QTableWidget()
+        self.tbl_dx.setColumnCount(3)
+        self.tbl_dx.setHorizontalHeaderLabels(["", "判据", "实际数值"])
+        ll.addWidget(self.tbl_dx)
+        self.txt_dx = QtWidgets.QPlainTextEdit(readOnly=True)
+        self.txt_dx.setStyleSheet("font-family: Consolas, monospace; font-size:12px;")
+        self.txt_dx.setMaximumHeight(190)
+        ll.addWidget(self.txt_dx)
+        split.addWidget(left)
+
+        right = QtWidgets.QWidget(); rl = QtWidgets.QVBoxLayout(right)
+        self.canvas_dx = Canvas(2, 1, (8, 6.4))
+        rl.addWidget(NavToolbar(self.canvas_dx, self)); rl.addWidget(self.canvas_dx)
+        split.addWidget(right)
+        split.setSizes([560, 720])
+        lay.addWidget(split)
+        return w
+
+    def on_diagnose(self):
+        if self.panel is None:
+            QtWidgets.QMessageBox.warning(self, "提示", "请先在「数据」页加载面板")
+            return
+        tk = self.cb_dx.currentText().strip()
+        if not tk.endswith(".T") and tk.isdigit():
+            tk += ".T"
+        if tk not in self.prices.columns:
+            QtWidgets.QMessageBox.warning(self, "提示", f"股票池中没有 {tk}")
+            return
+        from diagnosis import diagnose
+        vol = to_wide(self.panel, "volume")
+        d = diagnose(self.prices[tk], vol[tk], horizon=self.sp_dx_h.value())
+        if "error" in d:
+            QtWidgets.QMessageBox.warning(self, "提示", d["error"])
+            return
+
+        color = {"上升趋势确立": "#2f9e44", "偏强/趋势形成中": "#66a80f", "横盘整理": "#f08c00",
+                 "偏弱": "#e8590c", "下降趋势": "#c92a2a"}.get(d["verdict"], "#495057")
+        self.lbl_verdict.setStyleSheet(
+            f"font-size:19px; font-weight:bold; padding:12px; color:white; "
+            f"background:{color}; border-radius:6px;")
+        self.lbl_verdict.setText(
+            f"{tk}   【{d['verdict']}】   {d['score']}/{d['total']} 项达标   "
+            f"现价 {d['price']:,.0f}円   ({d['note']})")
+
+        self.tbl_dx.setRowCount(len(d["checks"]))
+        for i, (k, ok) in enumerate(d["checks"].items()):
+            it = QtWidgets.QTableWidgetItem("✓" if ok else "✗")
+            it.setForeground(QtCore.Qt.darkGreen if ok else QtCore.Qt.red)
+            self.tbl_dx.setItem(i, 0, it)
+            self.tbl_dx.setItem(i, 1, QtWidgets.QTableWidgetItem(k))
+            self.tbl_dx.setItem(i, 2, QtWidgets.QTableWidgetItem(d["detail"].get(k, "")))
+        self.tbl_dx.resizeColumnsToContents()
+
+        h, hs = d["horizon"], d["hist"]
+        edge = (hs["胜率"] - hs["基准胜率"]) if hs["胜率"] == hs["胜率"] else float("nan")
+        lines = [
+            f"历史检验 — 这只股票过去出现「{d['strong_score']}项以上达标」时:",
+            f"  样本数      : {hs['样本数']} 次",
+            f"  {h}日后上涨概率: {hs['胜率']:.0%}" if hs["胜率"] == hs["胜率"] else "  样本不足",
+            f"  {h}日平均收益  : {hs['平均收益']:+.2%}" if hs["平均收益"] == hs["平均收益"] else "",
+            f"  中位数收益   : {hs['中位数收益']:+.2%}" if hs["中位数收益"] == hs["中位数收益"] else "",
+            "",
+            f"对照(该股任意时点买入): 胜率{hs['基准胜率']:.0%} 平均{hs['基准平均']:+.2%}",
+            f"→ 强势形态相对基准的优势: 胜率{edge:+.0%}" if edge == edge else "",
+            "",
+            "⚠这是该股自身历史统计，样本重叠(相邻交易日高度相关)，",
+            "  优势不明显时不要当作可靠信号。",
+        ]
+        self.txt_dx.setPlainText("\n".join(x for x in lines if x != ""))
+
+        axes = self.canvas_dx.clear(2, 1)
+        ax = axes[0]
+        px, (ma5, ma20, ma60) = d["series"], d["ma"]
+        show = px.index[-500:]
+        ax.plot(show, px.reindex(show), lw=1.2, color="#212529", label="复权价")
+        ax.plot(show, ma20.reindex(show), lw=1.0, color="#1971c2", label="MA20")
+        ax.plot(show, ma60.reindex(show), lw=1.0, color="#e8590c", label="MA60")
+        ax.legend(fontsize=8); ax.grid(alpha=0.3)
+        ax.set_title(f"{tk} 近两年走势与均线")
+        ax = axes[1]
+        sc = d["scores"].reindex(show)
+        ax.fill_between(show, 0, sc, color="#4dabf7", alpha=0.6, step="mid")
+        ax.axhline(d["strong_score"], color="#2f9e44", ls="--", lw=1.2, label=f"强势线({d['strong_score']}项)")
+        ax.axhline(4, color="#f08c00", ls="--", lw=1.0, label="整理线(4项)")
+        ax.set_ylim(0, 10); ax.legend(fontsize=8); ax.grid(alpha=0.3)
+        ax.set_title("趋势强度得分(0-10项) — 绿线以上=上升趋势")
+        self.canvas_dx.draw()
+        self.statusBar().showMessage(f"{tk} 诊断完成: {d['verdict']}")
 
     # ---------- 回测页 ----------
     def _tab_backtest(self):
