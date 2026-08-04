@@ -98,9 +98,30 @@ def build_panel(market: str = "prime", years: int = 10, workers: int = 8,
     return panel
 
 
-def to_wide(panel: pd.DataFrame, field: str = "adjclose") -> pd.DataFrame:
-    """长表→宽表 (index=date, columns=ticker)"""
-    return panel.pivot(index="date", columns="ticker", values=field).sort_index()
+# 单日涨跌超过此倍数视为数据错误(日股有涨跌停限制,正常单日不可能翻倍以上)
+MAX_DAILY_MOVE = 1.0   # ±100%
+
+
+def _scrub_bad_prices(px: pd.DataFrame) -> pd.DataFrame:
+    """剔除数据源的坏价格。实测Yahoo复权价偶有天文数字(如8303.T出现539亿円/4.6e33,
+    真实价约2730)，一个点就能污染整个统计。判据：单日涨跌>±100%且次日跌回 → 置NaN"""
+    r = px.pct_change()
+    bad = r.abs() > MAX_DAILY_MOVE
+    # 反向跳变(次日又跳回)也标记，覆盖"错一天"和"错一段"两种情况
+    bad = bad | bad.shift(-1).fillna(False)
+    n = int(bad.sum().sum())
+    if n:
+        cols = px.columns[bad.any()].tolist()
+        print(f"[数据清洗] 剔除 {n} 个异常价格点，涉及 {len(cols)} 只: {cols[:5]}")
+    return px.mask(bad)
+
+
+def to_wide(panel: pd.DataFrame, field: str = "adjclose", scrub: bool = True) -> pd.DataFrame:
+    """长表→宽表 (index=date, columns=ticker)。价格字段默认做坏点清洗"""
+    w = panel.pivot(index="date", columns="ticker", values=field).sort_index()
+    if scrub and field in ("adjclose", "close", "open", "high", "low"):
+        w = _scrub_bad_prices(w)
+    return w
 
 
 def daily_returns(panel: pd.DataFrame) -> pd.DataFrame:
