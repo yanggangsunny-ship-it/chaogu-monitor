@@ -236,11 +236,13 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.addLayout(bar)
 
         note = QtWidgets.QLabel(
-            "⚠两个筛选条件的历史检验结果(Prime全市场10年，都是坏消息，如实告知)：\n"
-            "  · 10项判据得分：得分高者后20日胜率52.9% < 随机买入54.6% (t=-3.88) → 无预测力甚至反向\n"
-            "  · 同行超额20日：t=-5.87 显著为负 → **超额高的后续跑输**，「强势模式」是历史上吃亏的一边\n"
-            "  · 日股是反转市场(20日反转 t=+5.22)，「反转模式」才与验证方向一致\n"
-            "→ 本榜是状态筛选器，不是买入建议。选哪个方向由你决定，数据摆在这里。")
+            "⚠ 这两个筛选条件，用日股10年数据回头验过，结果是坏消息，如实告诉你：\n"
+            "  ① 10项判据得分高的股票 → 之后20天上涨概率 52.9%，"
+            "反而低于随便哪天买入的 54.6%（这个差距纯属巧合的概率约万分之一，也就是说是真的）\n"
+            "  ② 同行超额高的股票 → 之后20天反而更容易跌（纯属巧合的概率小于千万分之一，"
+            "几乎可以确定）。所以「强势模式」是历史上吃亏的那一边\n"
+            "  ③ 日股是「涨多了会回调」的市场，「反转模式」才和数据方向一致\n"
+            "→ 本榜只告诉你「今天谁的技术面强/弱」，不是买入建议。选哪边由你，数据我摆在这里。")
         note.setWordWrap(True)
         note.setStyleSheet("background:#fff3bf; padding:7px; border-radius:4px; font-size:12px;")
         lay.addWidget(note)
@@ -362,9 +364,11 @@ class MainWindow(QtWidgets.QMainWindow):
         # -- 判断清单
         p1 = QtWidgets.QWidget(); l1 = QtWidgets.QVBoxLayout(p1)
         warn = QtWidgets.QLabel(
-            "⚠这10项判据经全市场98万样本验证：得分高的股票后20日胜率52.9%，"
-            "低于随机买入54.6%(t=-3.88)。日股是反转市场，这些动量类判据无预测力。\n"
-            "→ 只能当「现状描述」看，不要当买入信号。")
+            "⚠ 这10项判据我用全市场98万个历史样本检验过：得分高的股票，之后20天上涨概率 52.9%，"
+            "反而不如随便哪天买入的 54.6%。\n"
+            "这个差距不是巧合(纯属运气的概率约万分之一)——日股是「涨多了会回调」的市场，"
+            "而这10项全是「最近涨得好」的不同说法，方向天然反了。\n"
+            "→ 只能当「现在是什么状态」看，别当买入信号。")
         warn.setWordWrap(True)
         warn.setStyleSheet("background:#fff3bf; padding:8px; border-radius:4px; font-size:12px;")
         l1.addWidget(warn)
@@ -707,20 +711,29 @@ class MainWindow(QtWidgets.QMainWindow):
         ax.set_title("IC衰减"); ax.set_xlabel("持有期(日)")
         self.canvas_bt.draw()
 
+        import plain
         n = len(research_log.load_trials())
-        thr = max(research_log.bonferroni_t(n), 3.0)
-        verdict = "✓ 站得住" if abs(res["stats"]["t统计量"]) > thr else "✗ 校正后不显著"
+        t = res["stats"]["t统计量"]
         ann = (1 + qr.mean()) ** TRADING_DAYS - 1
-        L = [f"因子: {res['tag']}   持有期{res['h']}日 {ng}分组", "=" * 68]
+        L = [f"因子: {res['tag']}   持有期{res['h']}日 {ng}分组", "=" * 70,
+             "【一句话结论】", f"  {plain.explain_t(t, '这个因子', '数值越高,之后越涨', '数值越高,之后反而越跌')}",
+             f"  {plain.coin_flip_analogy(t)}",
+             f"  {plain.verdict_line(t, n)}", "",
+             "【详细数字】"]
         L += [f"  {k:<12}: {v:>10.4f}" if isinstance(v, float) else f"  {k:<12}: {v:>10}"
               for k, v in res["stats"].items()]
+        L.append("    ↑ IC均值=预测准确度(0=没用,±0.03以上算不错) ICIR=信号稳定性 "
+                 "t统计量=可信度(见上方人话解释)")
         L.append("\n  分组年化: " + " | ".join(f"{c}:{ann[c]:+.1%}" for c in qr.columns))
-        L.append("\n  ── 成本分析 ──")
+        L.append("    ↑ 按因子值把股票分5组,Q1最低Q5最高。若因子有用,应呈单调排列")
+        L.append("\n  ── 交易成本检验(能不能真赚到) ──")
         for k, v in res["crep"].items():
             L.append(f"  {k:<14}: " + (f"{v:+.2%}" if ("年化" in k and "次数" not in k and "换手" not in k)
                                        else f"{v:.2f}"))
-        L.append(f"\n  [登记册] 第{n}次试验 | 噪声地板t={research_log.expected_max_t(n):.2f}"
-                 f" | 门槛t>{thr:.2f} | {verdict}")
+        be = res["crep"].get("盈亏平衡成本bp")
+        if be == be:
+            L.append(f"    ↑ 盈亏平衡成本{be:.1f}bp = 每次买卖成本超过 {be / 100:.3f}% 就白干。"
+                     f"日股实际买卖价差通常0.05%~0.1%")
         self.txt_bt.setPlainText("\n".join(L))
         self.btn_run.setEnabled(True)
         self.statusBar().showMessage("回测完成")
@@ -825,7 +838,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if not trials:
             self.lbl_thr.setText("登记册为空")
             return
-        cols = ["因子名", "持有期", "IC均值", "t统计量", "ICIR年化", "多空夏普", "试验时间"]
+        import plain
+        cols = ["因子名", "持有期", "IC均值", "t统计量", "这个数字什么意思", "ICIR年化", "多空夏普"]
         self.tbl_log.clear()
         self.tbl_log.setColumnCount(len(cols)); self.tbl_log.setRowCount(len(trials))
         self.tbl_log.setHorizontalHeaderLabels(cols)
@@ -836,18 +850,29 @@ class MainWindow(QtWidgets.QMainWindow):
             except (ValueError, TypeError, KeyError):
                 return 0.0
         for i, r in enumerate(sorted(trials, key=lambda x: -_t(x))):
-            for j, c in enumerate(cols):
-                self.tbl_log.setItem(i, j, QtWidgets.QTableWidgetItem(str(r.get(c, ""))))
+            try:
+                tv = float(r["t统计量"])
+            except (ValueError, TypeError, KeyError):
+                tv = 0.0
+            meaning = (f"{plain.confidence_label(tv)}"
+                       f"({'正向' if tv > 0 else '反向'},巧合概率{plain.odds_text(plain.p_value(tv))})"
+                       if abs(tv) >= 1.5 else "看不出规律")
+            vals = [r.get("因子名", ""), r.get("持有期", ""), r.get("IC均值", ""),
+                    r.get("t统计量", ""), meaning, r.get("ICIR年化", ""), r.get("多空夏普", "")]
+            for j, v in enumerate(vals):
+                self.tbl_log.setItem(i, j, QtWidgets.QTableWidgetItem(str(v)))
         self.tbl_log.resizeColumnsToContents()
         n = len(trials)
         exp_max, bonf = research_log.expected_max_t(n), research_log.bonferroni_t(n)
         thr = max(bonf, 3.0)
         passed = [r["因子名"] for r in trials if _t(r) > thr]
         self.lbl_thr.setText(
-            f"累计 {n} 次试验   |   噪声地板(期望最大t) {exp_max:.2f}  ·  "
-            f"Bonferroni {bonf:.2f}  ·  HLZ经验值 3.00   →   判定门槛 t > {thr:.2f}\n"
-            f"通过的因子: {', '.join(sorted(set(passed))) if passed else '无'}\n"
-            f"⚠调参数/换股票池/换持有期都算试验。少记 = 高估显著性。")
+            f"你一共试了 {n} 个因子(含调参数的变体)。\n"
+            f"为什么试得越多、要求越严：纯靠运气，试{n}次里最好的那个"
+            f"「t统计量」也能达到 {exp_max:.1f} 左右——所以合格线要提到 {thr:.1f} 以上，"
+            f"才排除得掉「碰巧撞对」。\n"
+            f"目前通过这条线的: {', '.join(sorted(set(passed))) if passed else '无'}\n"
+            f"⚠ 调参数、换股票池、换持有期都算一次试验。记漏了 = 高估自己的发现。")
 
 
 def main():
