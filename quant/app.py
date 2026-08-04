@@ -23,7 +23,7 @@ import pandas as pd
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavToolbar
 from matplotlib.figure import Figure
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtCore, QtGui, QtWidgets
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
@@ -66,15 +66,99 @@ class Worker(QtCore.QThread):
 
 
 class Canvas(FigureCanvas):
-    def __init__(self, nrows=1, ncols=1, figsize=(11, 4.5)):
+    """可交互画布：滚轮缩放、拖动平移、快捷键(R重置/←→平移/上下缩放)"""
+
+    def __init__(self, nrows=1, ncols=1, figsize=(11, 4.5), interactive: bool = False):
         self.fig = Figure(figsize=figsize, tight_layout=True)
         super().__init__(self.fig)
         self.axes = self.fig.subplots(nrows, ncols)
+        self._home = None      # 初始视图范围,用于R键重置
+        self._drag = None
+        if interactive:
+            self.setFocusPolicy(QtCore.Qt.StrongFocus)
+            self.mpl_connect("scroll_event", self._on_scroll)
+            self.mpl_connect("button_press_event", self._on_press)
+            self.mpl_connect("motion_notify_event", self._on_motion)
+            self.mpl_connect("button_release_event", self._on_release)
+            self.mpl_connect("key_press_event", self._on_key)
 
     def clear(self, nrows=1, ncols=1):
         self.fig.clear()
         self.axes = self.fig.subplots(nrows, ncols)
+        self._home = None
         return self.axes
+
+    def _all_axes(self):
+        return list(self.fig.get_axes())
+
+    def save_home(self):
+        self._home = [(ax.get_xlim(), ax.get_ylim()) for ax in self._all_axes()]
+
+    # ---- 滚轮缩放：以光标位置为中心，X轴联动(多子图共享时间轴) ----
+    def _on_scroll(self, ev):
+        if ev.inaxes is None:
+            return
+        if self._home is None:
+            self.save_home()
+        scale = 0.8 if ev.button == "up" else 1.25    # 上滚放大
+        x, y = ev.xdata, ev.ydata
+        shift = QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.ShiftModifier
+        for ax in self._all_axes():
+            x0, x1 = ax.get_xlim()
+            ax.set_xlim(x - (x - x0) * scale, x + (x1 - x) * scale)
+            if ax is ev.inaxes and not shift:          # Shift+滚轮=只缩X轴
+                y0, y1 = ax.get_ylim()
+                ax.set_ylim(y - (y - y0) * scale, y + (y1 - y) * scale)
+        self.draw_idle()
+
+    # ---- 左键拖动平移 ----
+    def _on_press(self, ev):
+        if ev.button == 1 and ev.inaxes is not None:
+            if self._home is None:
+                self.save_home()
+            self._drag = (ev.x, ev.y, [(ax, ax.get_xlim(), ax.get_ylim())
+                                       for ax in self._all_axes()])
+
+    def _on_motion(self, ev):
+        if not self._drag or ev.x is None:
+            return
+        x0, y0, states = self._drag
+        for ax, xlim, ylim in states:
+            inv = ax.transData.inverted()
+            p0 = inv.transform((x0, y0))
+            p1 = inv.transform((ev.x, ev.y))
+            dx, dy = p0[0] - p1[0], p0[1] - p1[1]
+            ax.set_xlim(xlim[0] + dx, xlim[1] + dx)
+            if ax is ev.inaxes:
+                ax.set_ylim(ylim[0] + dy, ylim[1] + dy)
+        self.draw_idle()
+
+    def _on_release(self, ev):
+        self._drag = None
+
+    # ---- 快捷键 ----
+    def _on_key(self, ev):
+        if ev.key in ("r", "R", "home"):               # 重置视图
+            if self._home:
+                for ax, (xl, yl) in zip(self._all_axes(), self._home):
+                    ax.set_xlim(xl); ax.set_ylim(yl)
+                self.draw_idle()
+            return
+        if self._home is None:
+            self.save_home()
+        step_map = {"left": -0.1, "right": 0.1}
+        zoom_map = {"up": 0.85, "down": 1.18, "+": 0.85, "-": 1.18, "=": 0.85}
+        if ev.key in step_map:                          # 左右平移
+            for ax in self._all_axes():
+                x0, x1 = ax.get_xlim(); d = (x1 - x0) * step_map[ev.key]
+                ax.set_xlim(x0 + d, x1 + d)
+            self.draw_idle()
+        elif ev.key in zoom_map:                        # 上下/加减缩放
+            s = zoom_map[ev.key]
+            for ax in self._all_axes():
+                x0, x1 = ax.get_xlim(); c = (x0 + x1) / 2; w = (x1 - x0) * s / 2
+                ax.set_xlim(c - w, c + w)
+            self.draw_idle()
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -217,6 +301,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sp_exc = QtWidgets.QDoubleSpinBox()
         self.sp_exc.setRange(0, 50); self.sp_exc.setValue(5.0); self.sp_exc.setSuffix(" %")
         self.sp_exc.setToolTip("同行超额门槛：强势模式=超额≥此值；反转模式=超额≤-此值")
+        self.sp_zone = QtWidgets.QDoubleSpinBox()
+        self.sp_zone.setRange(1, 20); self.sp_zone.setValue(5.0); self.sp_zone.setSuffix(" %")
+        self.sp_zone.setToolTip("现价落在「买入参考位」±此范围内 → 整行绿色高亮")
         btn = QtWidgets.QPushButton("扫描今日")
         btn.setStyleSheet("font-weight:bold; padding:6px 18px;")
         btn.clicked.connect(self.on_scan)
@@ -228,6 +315,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for wd in (QtWidgets.QLabel("筛选:"), self.sp_minscore, self.sp_topn,
                    QtWidgets.QLabel("方向:"), self.cb_mode,
                    QtWidgets.QLabel("同行超额门槛:"), self.sp_exc,
+                   QtWidgets.QLabel("买入区范围:"), self.sp_zone,
                    btn, b_exp, b_col, b_fav):
             bar.addWidget(wd)
         bar.addStretch()
@@ -248,9 +336,10 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.addWidget(note)
 
         self.tree_scr = QtWidgets.QTreeWidget()
-        self.tree_scr.setColumnCount(7)
+        self.tree_scr.setColumnCount(9)
         self.tree_scr.setHeaderLabels(["领域 / 股票", "公司名", "得分", "现价",
-                                       "20日涨幅", "同行超额", "60日涨幅"])
+                                       "买入参考", "距买入位", "20日涨幅", "同行超额", "60日涨幅"])
+        self.tree_scr.setColumnCount(9)
         self.tree_scr.setAlternatingRowColors(True)
         self.tree_scr.itemDoubleClicked.connect(self.on_tree_pick)
         self.tree_scr.itemClicked.connect(self._tree_hint)
@@ -326,7 +415,9 @@ class MainWindow(QtWidgets.QMainWindow):
             vol = to_wide(self.panel, "volume", scrub=False)
             res = scan(self.prices, vol, min_score=self.sp_minscore.value(),
                        top_n=self.sp_topn.value(), market=self.cb_market.currentText(),
-                       mode=self.cb_mode.currentText(), min_excess=self.sp_exc.value() / 100)
+                       mode=self.cb_mode.currentText(), min_excess=self.sp_exc.value() / 100,
+                       highs=to_wide(self.panel, "high"), lows=to_wide(self.panel, "low"),
+                       entry_tol=self.sp_zone.value() / 100)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "扫描失败", traceback.format_exc()[-1200:])
             self.lbl_scan.setText("扫描失败")
@@ -334,21 +425,37 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.tree_scr.clear()
         for sector, rows in res.items():
-            top = QtWidgets.QTreeWidgetItem([f"【{sector}】", f"{len(rows)}只入选",
-                                             "", "", "", "", ""])
+            n_zone = sum(1 for r in rows if r.get("in_zone"))
+            top = QtWidgets.QTreeWidgetItem([
+                f"【{sector}】", f"{len(rows)}只入选" + (f"  ⭐{n_zone}只在买入区" if n_zone else ""),
+                "", "", "", "", "", "", ""])
             f = top.font(0); f.setBold(True); top.setFont(0, f)
             top.setBackground(0, QtCore.Qt.lightGray)
             for r in rows:
                 nm = getattr(self, "names", {}).get(r["ticker"], "")
+                entry = r.get("entry")
+                gap = r.get("entry_gap")
                 child = QtWidgets.QTreeWidgetItem([
                     r["ticker"], nm, f"{r['score']}分", f"{r['price']:,.0f}",
+                    f"{entry:,.0f}" if entry else "-",
+                    f"{gap:+.1%}" if gap is not None else "-",
                     f"{r['chg20']:+.1%}", f"{r['excess20']:+.1%}", f"{r['chg60']:+.1%}"])
                 child.setData(0, QtCore.Qt.UserRole, r["ticker"])
-                # 超额为正标红(相对同行强)，为负标绿
-                child.setForeground(5, QtCore.Qt.red if r["excess20"] > 0 else QtCore.Qt.darkGreen)
-                # 20日涨幅过大(>20%)标橙提示回调风险
-                if r["chg20"] > 0.20:
-                    child.setForeground(4, QtCore.Qt.darkYellow)
+                child.setForeground(7, QtCore.Qt.red if r["excess20"] > 0 else QtCore.Qt.darkGreen)
+                if r["chg20"] > 0.20:              # 涨幅过大→回调风险
+                    child.setForeground(6, QtCore.Qt.darkYellow)
+                if r.get("in_zone"):               # 现价在买入参考位±5%内 → 整行高亮
+                    for c in range(9):
+                        child.setBackground(c, QtGui.QColor("#d3f9d8"))
+                    ft = child.font(0); ft.setBold(True)
+                    for c in (0, 1, 4, 5):
+                        child.setFont(c, ft)
+                    child.setText(0, "⭐ " + r["ticker"])
+                    rr = r.get("rr")
+                    child.setToolTip(0, f"现价距买入参考位 {gap:+.1%}(±5%内)\n"
+                                        f"买入{entry:,.0f} / 止损{r.get('stop', 0):,.0f} / "
+                                        f"目标{r.get('target', 0):,.0f}"
+                                        + (f" / 盈亏比{rr:.2f}" if rr == rr else ""))
                 top.addChild(child)
             if not rows:
                 top.addChild(QtWidgets.QTreeWidgetItem(["(无符合条件的股票)"]))
@@ -443,6 +550,27 @@ class MainWindow(QtWidgets.QMainWindow):
         left.addTab(p1, "判断清单")
         # -- 关键价位
         p2 = QtWidgets.QWidget(); l2 = QtWidgets.QVBoxLayout(p2)
+        how = QtWidgets.QLabel(
+            "📐 这些价位是怎么算出来的(全部可复核,无主观成分)：\n"
+            "· 压力位/支撑位 ← 两个来源合并：\n"
+            "   ① 摆动高低点：左右各5根K线内的局部最高/最低价(近250日)，"
+            "相近的(差<2%)合并成一条线\n"
+            "   ② 成交量密集区：近250日成交量按价格分40档，量最大的档位(POC)——"
+            "那里套牢盘和获利盘最多，天然形成阻力\n"
+            "   现价之下的叫支撑，之上的叫压力\n"
+            "· 「历史守住 x/y」← 历史上价格y次接近该线(±1.5%内)，"
+            "其中x次在随后5日内没被有效突破(超出2%)。y太小或x/y太低=这条线不可靠\n"
+            "· ATR(14) ← 近14日「真实波幅」均值，代表这只股票每天正常波动多少円\n"
+            "· 买入参考 = 最近支撑位 × 1.005（回踩到支撑上方一点）\n"
+            "· 止损位　 = 最近支撑位 − 2×ATR（放在日常波动之外，避免被随机噪音扫掉）\n"
+            "· 目标位　 = 最近压力位\n"
+            "· 盈亏比　 = (目标−买入) ÷ (买入−止损)，<1 表示冒的风险大于潜在收益\n"
+            "⚠这套方法是技术分析的通行做法，但**未经本工具的统计验证**——"
+            "支撑压力是市场参与者的行为惯性，不是物理定律。")
+        how.setWordWrap(True)
+        how.setStyleSheet("background:#f8f9fa; border:1px solid #dee2e6; padding:8px; "
+                          "border-radius:4px; font-size:12px;")
+        l2.addWidget(how)
         self.txt_lv = QtWidgets.QPlainTextEdit(readOnly=True)
         self.txt_lv.setStyleSheet("font-family: Consolas, monospace; font-size:12px;")
         l2.addWidget(self.txt_lv)
@@ -456,8 +584,14 @@ class MainWindow(QtWidgets.QMainWindow):
         split.addWidget(left)
 
         right = QtWidgets.QWidget(); rl = QtWidgets.QVBoxLayout(right)
-        self.canvas_dx = Canvas(2, 1, (8, 6.4))
-        rl.addWidget(NavToolbar(self.canvas_dx, self)); rl.addWidget(self.canvas_dx)
+        self.canvas_dx = Canvas(2, 1, (8, 6.4), interactive=True)
+        rl.addWidget(NavToolbar(self.canvas_dx, self))
+        tip = QtWidgets.QLabel(
+            "🖱 滚轮=缩放(以光标为中心) · Shift+滚轮=只缩时间轴 · 左键拖动=平移 · "
+            "⌨ R=重置 · ←→=平移 · ↑↓=缩放  (先点一下图再按键)")
+        tip.setStyleSheet("color:#495057; font-size:11px; padding:2px;")
+        rl.addWidget(tip)
+        rl.addWidget(self.canvas_dx)
         split.addWidget(right)
         split.setSizes([560, 720])
         lay.addWidget(split)
@@ -543,8 +677,10 @@ class MainWindow(QtWidgets.QMainWindow):
         ax.axhline(d["strong_score"], color="#2f9e44", ls="--", lw=1.2, label=f"强势线({d['strong_score']}项)")
         ax.axhline(4, color="#f08c00", ls="--", lw=1.0, label="整理线(4项)")
         ax.set_ylim(0, 10); ax.legend(fontsize=8); ax.grid(alpha=0.3)
-        ax.set_title("趋势强度得分(0-10项) — 绿线以上=上升趋势")
+        ax.set_title("趋势强度得分(0-10项) — 绿线以上=技术面强势状态")
         self.canvas_dx.draw()
+        self.canvas_dx.save_home()      # 记住初始视图,供R键重置
+        self.canvas_dx.setFocus()
         self.statusBar().showMessage(f"{tk} 诊断完成: {d['verdict']}")
 
     # ---------- 股票名 / 收藏 ----------

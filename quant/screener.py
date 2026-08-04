@@ -25,9 +25,27 @@ MODE_STRONG = "强势(超额高)"
 MODE_REVERSAL = "反转(超额低)"
 
 
+def entry_zone(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series,
+               tol: float = 0.05) -> dict | None:
+    """算该股的买入参考位，并判断现价是否落在其±tol范围内。
+    买入参考=最近支撑上方0.5%(见levels.trade_levels)"""
+    try:
+        from levels import trade_levels
+        r = trade_levels(high.dropna(), low.dropna(), close.dropna(), volume.dropna())
+    except Exception:
+        return None
+    entry, px = r["entry"], r["price"]
+    if not (entry and entry == entry and px):
+        return None
+    gap = (px - entry) / entry          # 现价相对买入位的偏离
+    return {"entry": entry, "gap": gap, "in_zone": abs(gap) <= tol,
+            "stop": r["stop"], "target": r["target"], "rr": r["risk_reward"]}
+
+
 def scan(prices: pd.DataFrame, volume: pd.DataFrame, min_score: int = 8,
          top_n: int = 3, market: str = "prime", mode: str = MODE_STRONG,
-         min_excess: float = 0.0) -> dict[str, list[dict]]:
+         min_excess: float = 0.0, highs: pd.DataFrame | None = None,
+         lows: pd.DataFrame | None = None, entry_tol: float = 0.05) -> dict[str, list[dict]]:
     """扫描各领域，返回 {领域: [ {ticker,score,chg20,chg60,excess20,price}, ... ]}
     mode=强势 → 只留 超额≥min_excess，按超额降序
     mode=反转 → 只留 超额≤-min_excess，按超额升序(跌得越多越前)"""
@@ -67,7 +85,18 @@ def scan(prices: pd.DataFrame, volume: pd.DataFrame, min_score: int = 8,
                 "chg20": c20, "chg60": c60, "excess20": exc,
             })
         rows.sort(key=lambda r: (-r["score"], r["excess20"] if reversal else -r["excess20"]))
-        out[name] = rows[:top_n]
+        rows = rows[:top_n]
+        # 只对入选的少数股票算买入区(trade_levels较重,不能全池跑)
+        if highs is not None and lows is not None:
+            for r in rows:
+                t = r["ticker"]
+                if t in highs.columns and t in lows.columns:
+                    ez = entry_zone(highs[t], lows[t], px[t], volume[t], entry_tol)
+                    if ez:
+                        r.update({"entry": ez["entry"], "entry_gap": ez["gap"],
+                                  "in_zone": ez["in_zone"], "stop": ez["stop"],
+                                  "target": ez["target"], "rr": ez["rr"]})
+        out[name] = rows
     return out
 
 
