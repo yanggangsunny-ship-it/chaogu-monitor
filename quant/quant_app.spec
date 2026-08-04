@@ -18,6 +18,12 @@ hiddenimports += [
     "xlrd",                      # 读JPX的xls名录
     "pandas._libs.tslibs.base",
     "matplotlib.backends.backend_qtagg",
+    # 本项目模块：多处是函数内延迟导入(import portfolio 等)，静态分析可能漏收，显式声明
+    "universe", "data", "evaluate", "factors", "neutralize", "costs",
+    "research_log", "signals", "diagnosis", "levels", "sector_rel",
+    "watchlist", "portfolio", "tracker", "screener", "sectors_custom",
+    "plain", "upside_score", "run_validate_diagnosis", "run_weight_criteria",
+    "run_upside_oos", "run_calibration", "run_robustness",
 ]
 
 a = Analysis(
