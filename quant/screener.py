@@ -42,7 +42,7 @@ def entry_zone(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Ser
             "stop": r["stop"], "target": r["target"], "rr": r["risk_reward"]}
 
 
-def scan(prices: pd.DataFrame, volume: pd.DataFrame, min_score: int = 8,
+def scan(prices: pd.DataFrame, volume: pd.DataFrame, min_score: int = 80,
          top_n: int = 3, market: str = "prime", mode: str = MODE_STRONG,
          min_excess: float = 0.0, highs: pd.DataFrame | None = None,
          lows: pd.DataFrame | None = None, entry_tol: float = 0.05) -> dict[str, list[dict]]:
@@ -81,7 +81,7 @@ def scan(prices: pd.DataFrame, volume: pd.DataFrame, min_score: int = 8,
                 continue
             c60 = float(px[t].iloc[-1] / px[t].iloc[-61] - 1)
             rows.append({
-                "ticker": t, "score": int(s), "price": float(px[t].iloc[-1]),
+                "ticker": t, "score": float(s), "price": float(px[t].iloc[-1]),
                 "chg20": c20, "chg60": c60, "excess20": exc,
             })
         rows.sort(key=lambda r: (-r["score"], r["excess20"] if reversal else -r["excess20"]))

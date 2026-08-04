@@ -290,8 +290,9 @@ class MainWindow(QtWidgets.QMainWindow):
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(w)
         bar = QtWidgets.QHBoxLayout()
-        self.sp_minscore = QtWidgets.QSpinBox(); self.sp_minscore.setRange(1, 10); self.sp_minscore.setValue(8)
-        self.sp_minscore.setSuffix(" 分以上")
+        self.sp_minscore = QtWidgets.QSpinBox(); self.sp_minscore.setRange(1, 100); self.sp_minscore.setValue(80)
+        self.sp_minscore.setSingleStep(5)
+        self.sp_minscore.setSuffix(" 分以上(满分100)")
         self.sp_topn = QtWidgets.QSpinBox(); self.sp_topn.setRange(1, 10); self.sp_topn.setValue(3)
         self.sp_topn.setSuffix(" 只/领域")
         from screener import MODE_REVERSAL, MODE_STRONG
@@ -438,7 +439,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 entry = r.get("entry")
                 gap = r.get("entry_gap")
                 child = QtWidgets.QTreeWidgetItem([
-                    r["ticker"], nm, f"{r['score']}分", f"{r['price']:,.0f}",
+                    r["ticker"], nm, f"{r['score']:.0f}分", f"{r['price']:,.0f}",
                     f"{entry:,.0f}" if entry else "-",
                     f"{gap:+.1%}" if gap is not None else "-",
                     f"{r['chg20']:+.1%}", f"{r['excess20']:+.1%}", f"{r['chg60']:+.1%}"])
@@ -539,6 +540,34 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.addWidget(split)
         return w
 
+    _extra_cache: dict = {}
+
+    def _fetch_extra(self, tickers: list[str]) -> dict:
+        """抓取股票池之外的标的(ETF等)。结果缓存在内存，避免每次刷新都重下"""
+        from data import _fetch_one
+        import requests
+        out = {}
+        need = []
+        for t in tickers:
+            if t in self._extra_cache:
+                out[t] = self._extra_cache[t]
+            else:
+                need.append(t)
+        if need:
+            s = requests.Session()
+            s.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+            for t in need:
+                df = _fetch_one(s, t, self.sp_years.value())
+                if df is None or df.empty:
+                    continue
+                df = df.copy()
+                df["date"] = pd.to_datetime(df["date"])
+                df = df.set_index("date").sort_index()
+                cols = {f: df[f] for f in ("open", "high", "low", "close", "adjclose", "volume")}
+                self._extra_cache[t] = cols
+                out[t] = cols
+        return out
+
     def _load_pos_table(self):
         import portfolio
         rows = portfolio.load()
@@ -619,24 +648,42 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QApplication.processEvents()
         hi = to_wide(self.panel, "high"); lo = to_wide(self.panel, "low")
         vol = to_wide(self.panel, "volume", scrub=False)
-        self._pf_results = []
+        # 持仓里可能有不在股票池的标的(如ETF 1579不属于Prime内国株) → 按需单独抓取
+        missing = [r["ticker"] for r in rows if r["ticker"] not in self.prices.columns]
+        extra = {}
+        if missing:
+            self.statusBar().showMessage(f"补取 {len(missing)} 只池外标的数据…")
+            QtWidgets.QApplication.processEvents()
+            extra = self._fetch_extra(missing)
+
+        def _series(tk, field):
+            if tk in extra:
+                return extra[tk][field]
+            return {"adjclose": self.prices, "high": hi, "low": lo, "volume": vol}[field][tk]
+
+        # ⚠必须与表格行一一对应：跳过的标的用None占位，否则点击行会取错数据
+        self._pf_results = [None] * len(rows)
         for i, r in enumerate(rows):
             tk = r["ticker"]
-            if tk not in self.prices.columns:
+            if tk not in self.prices.columns and tk not in extra:
                 continue
-            price = float(self.prices[tk].dropna().iloc[-1])
+            try:
+                close = _series(tk, "adjclose").dropna()
+                price = float(close.iloc[-1])
+            except Exception:
+                continue
             lv = None
             try:
-                lv = trade_levels(hi[tk].dropna(), lo[tk].dropna(),
-                                  self.prices[tk].dropna(), vol[tk].dropna())
+                lv = trade_levels(_series(tk, "high").dropna(), _series(tk, "low").dropna(),
+                                  close, _series(tk, "volume").dropna())
             except Exception:
                 pass
             a = portfolio.analyze(r, price, lv)
             a["_levels"] = lv
-            self._pf_results.append(a)
+            self._pf_results[i] = a
             for j, v in [(5, f"{price:,.0f}"), (6, f"{a['value']:,.0f}"),
                          (7, f"{a['pnl']:+,.0f}"), (8, f"{a['pnl_pct']:+.1f}%"),
-                         (9, f"{a.get('ratio', float('nan')):.2f}" if a.get("ratio") == a.get("ratio") else "-")]:
+                         (9, f"{a['ratio']:.2f}" if a.get("ratio") == a.get("ratio") else "-")]:
                 it = QtWidgets.QTableWidgetItem(v)
                 it.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
                 if j in (7, 8):
@@ -644,7 +691,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.tbl_pos.setItem(i, j, it)
         self.tbl_pos.resizeColumnsToContents()
 
-        t = portfolio.totals(self._pf_results)
+        valid = [a for a in self._pf_results if a]
+        t = portfolio.totals(valid)
         self.lbl_pf.setText(
             f"总市值 {t['value']:,.0f}円   成本 {t['cost_amt']:,.0f}円   "
             f"盈亏 {t['pnl']:+,.0f}円 ({t['pnl_pct']:+.1f}%)")
@@ -659,10 +707,13 @@ class MainWindow(QtWidgets.QMainWindow):
         L += ["", "  ↑「全部到T1」= 假设每只都涨到各自第一道压力位时的组合盈亏。",
               "    这是极端情景不是预测——实际不可能所有股票同时到位。",
               "", "── 逐只明细(点上方行看单只详情) ──"]
-        for a in self._pf_results:
+        for a in valid:
             L.append(f"  {a['ticker']:<9}{a['name'][:14]:<16}{a['pnl']:>+10,.0f}円"
                      f" ({a['pnl_pct']:+6.1f}%)   上行/下行 "
-                     + (f"{a.get('ratio'):.2f}" if a.get("ratio") == a.get("ratio") else "-"))
+                     + (f"{a['ratio']:.2f}" if a.get("ratio") == a.get("ratio") else "-"))
+        skipped = [rows[i]["ticker"] for i, a in enumerate(self._pf_results) if a is None]
+        if skipped:
+            L.append(f"\n  ⚠无数据(已跳过): {', '.join(skipped)}")
         self.txt_pf.setPlainText("\n".join(L))
         self.statusBar().showMessage("持仓测算完成")
 
@@ -677,6 +728,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if i >= len(self._pf_results):
             return
         a = self._pf_results[i]
+        if a is None:      # 该行标的无数据(池外且抓取失败)
+            self.txt_pf.setPlainText(
+                f"该标的无行情数据，无法测算。\n"
+                f"可能原因：不在当前股票池(如ETF/其他市场)，或代码有误。")
+            return
         lv = a.get("_levels")
         L = [f"══ {a['ticker']}  {a['name']}  [{a['kind']}] ══",
              f"  持有 {a['qty']:,}股   成本 {a['cost']:,.2f}円   现价 {a['price']:,.0f}円",
@@ -751,8 +807,8 @@ class MainWindow(QtWidgets.QMainWindow):
         warn.setStyleSheet("background:#fff3bf; padding:8px; border-radius:4px; font-size:12px;")
         l1.addWidget(warn)
         self.tbl_dx = QtWidgets.QTableWidget()
-        self.tbl_dx.setColumnCount(3)
-        self.tbl_dx.setHorizontalHeaderLabels(["", "判据", "实际数值"])
+        self.tbl_dx.setColumnCount(5)
+        self.tbl_dx.setHorizontalHeaderLabels(["", "判据", "权重", "得分", "实际数值"])
         l1.addWidget(self.tbl_dx)
         self.txt_dx = QtWidgets.QPlainTextEdit(readOnly=True)
         self.txt_dx.setStyleSheet("font-family: Consolas, monospace; font-size:12px;")
@@ -831,16 +887,29 @@ class MainWindow(QtWidgets.QMainWindow):
             f"background:{color}; border-radius:6px;")
         nm = getattr(self, "names", {}).get(tk, "")
         self.lbl_verdict.setText(
-            f"{tk} {nm}   【{d['verdict']}】   {d['score']}/{d['total']} 项达标   "
+            f"{tk} {nm}   【{d['verdict']}】   {d['score']:.0f}/{d['total']} 分   "
             f"现价 {d['price']:,.0f}円   ({d['note']})")
 
-        self.tbl_dx.setRowCount(len(d["checks"]))
-        for i, (k, ok) in enumerate(d["checks"].items()):
+        wts = d.get("weights", {})
+        # 按权重从大到小排,让重要判据在最上面
+        items = sorted(d["checks"].items(), key=lambda kv: -wts.get(kv[0], 0))
+        self.tbl_dx.setRowCount(len(items))
+        for i, (k, ok) in enumerate(items):
+            wt = wts.get(k, 0)
             it = QtWidgets.QTableWidgetItem("✓" if ok else "✗")
             it.setForeground(QtCore.Qt.darkGreen if ok else QtCore.Qt.red)
             self.tbl_dx.setItem(i, 0, it)
             self.tbl_dx.setItem(i, 1, QtWidgets.QTableWidgetItem(k))
-            self.tbl_dx.setItem(i, 2, QtWidgets.QTableWidgetItem(d["detail"].get(k, "")))
+            w_it = QtWidgets.QTableWidgetItem(f"{wt}")
+            w_it.setTextAlignment(QtCore.Qt.AlignCenter)
+            self.tbl_dx.setItem(i, 2, w_it)
+            s_it = QtWidgets.QTableWidgetItem(f"{wt}" if ok else "0")
+            s_it.setTextAlignment(QtCore.Qt.AlignCenter)
+            if ok:
+                f2 = s_it.font(); f2.setBold(True); s_it.setFont(f2)
+                s_it.setForeground(QtCore.Qt.darkGreen)
+            self.tbl_dx.setItem(i, 3, s_it)
+            self.tbl_dx.setItem(i, 4, QtWidgets.QTableWidgetItem(d["detail"].get(k, "")))
         self.tbl_dx.resizeColumnsToContents()
 
         h, hs = d["horizon"], d["hist"]

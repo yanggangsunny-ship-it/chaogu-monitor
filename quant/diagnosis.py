@@ -22,6 +22,25 @@ def _rsi(close: pd.Series, n: int = 14) -> pd.Series:
     return 100 - 100 / (1 + up / dn.replace(0, np.nan))
 
 
+# 各判据权重(合计100)。**不是我拍脑袋定的**：2026-08-04用Prime全市场10年数据，
+# 把每条判据单独当0/1因子跑IC，按实测|t统计量|(信息含量)分配。见 run_weight_criteria.py
+# ⚠权重高只代表这条判据「携带的信息多」，与方向无关——实测所有判据的t都是负的
+#   (满足时后续反而跌),这是日股反转特性。
+CRITERIA_WEIGHTS = {
+    "20日线向上": 16,        # t=-4.38 信息量最大
+    "站上60日线": 14,        # t=-4.07
+    "多头排列": 14,          # t=-4.03
+    "20日涨幅为正": 13,      # t=-3.88
+    "RSI>50": 13,           # t=-3.79
+    "未跌破近20日低点": 12,   # t=-3.66
+    "站上20日线": 10,        # t=-2.87
+    "60日涨幅为正": 5,       # t=-1.53 信息量已很弱
+    "60日线向上": 2,         # t=-0.70 基本没信息
+    "量能配合": 1,           # t=+0.37 唯一方向为正,但完全不显著
+}
+TOTAL_SCORE = 100
+
+
 def build_checks(prices: pd.Series, volume: pd.Series) -> pd.DataFrame:
     """逐日算出10条判据的布尔矩阵(全部只用当日及之前数据)"""
     ma5, ma20, ma60 = _sma(prices, 5), _sma(prices, 20), _sma(prices, 60)
@@ -41,25 +60,30 @@ def build_checks(prices: pd.Series, volume: pd.Series) -> pd.DataFrame:
     return chk
 
 
-def verdict_from_score(score: int, total: int = 10) -> tuple[str, str]:
+def weighted_score(checks_row) -> float:
+    """按权重算总分(满分100)"""
+    return float(sum(CRITERIA_WEIGHTS.get(k, 0) for k, v in checks_row.items() if v))
+
+
+def verdict_from_score(score: float, total: int = TOTAL_SCORE) -> tuple[str, str]:
     """得分 → **状态描述**(不是预测)。
     ⚠2026-08-04全市场验证(98万样本): 得分高的股票后20日胜率52.9%,
       低于随机买入的54.6%(t=-3.88)。这10项判据在日股**没有预测力甚至反向**
       (日股是反转市场,而这些判据全是动量变体)。措辞已从"上升趋势确立"改为
       纯状态描述，不再暗示未来方向。"""
-    if score >= 8:
-        return "技术面强势(状态)", "多项指标处于强势区间 — 描述现状,不预示后市"
-    if score >= 6:
-        return "技术面偏强(状态)", "多数指标偏强 — 描述现状,不预示后市"
-    if score >= 4:
-        return "多空交织(状态)", "指标分歧,无明确方向"
-    if score >= 2:
-        return "技术面偏弱(状态)", "多数指标偏弱 — 描述现状,不预示后市"
-    return "技术面弱势(状态)", "指标全面走弱 — 描述现状,不预示后市"
+    if score >= 80:
+        return "技术面强势(状态)", "高权重判据基本全满足 — 描述现状,不预示后市"
+    if score >= 60:
+        return "技术面偏强(状态)", "多数判据偏强 — 描述现状,不预示后市"
+    if score >= 40:
+        return "多空交织(状态)", "判据分歧,无明确方向"
+    if score >= 20:
+        return "技术面偏弱(状态)", "多数判据偏弱 — 描述现状,不预示后市"
+    return "技术面弱势(状态)", "判据全面走弱 — 描述现状,不预示后市"
 
 
 def diagnose(prices: pd.Series, volume: pd.Series, horizon: int = 20,
-             strong_score: int = 8) -> dict:
+             strong_score: int = 80) -> dict:
     """完整诊断。返回结论/得分/清单明细/历史同形态统计"""
     prices, volume = prices.dropna(), volume.reindex(prices.index)
     if len(prices) < 80:
@@ -68,8 +92,8 @@ def diagnose(prices: pd.Series, volume: pd.Series, horizon: int = 20,
     chk = build_checks(prices, volume)
     today = chk.index[-1]
     row = chk.loc[today]
-    score = int(row.sum())
-    verdict, note = verdict_from_score(score, len(row))
+    score = weighted_score(row)                     # 加权总分(满分100)
+    verdict, note = verdict_from_score(score)
 
     # 明细：每条判据附具体数值
     ma5, ma20, ma60 = _sma(prices, 5), _sma(prices, 20), _sma(prices, 60)
@@ -90,7 +114,9 @@ def diagnose(prices: pd.Series, volume: pd.Series, horizon: int = 20,
     }
 
     # 历史同形态统计：过去出现同等得分时，之后horizon日的表现
-    scores = chk.sum(axis=1)
+    w = pd.Series(CRITERIA_WEIGHTS)
+    scores = chk[[c for c in chk.columns if c in w.index]].astype(float) @ w.reindex(
+        [c for c in chk.columns if c in w.index])
     fwd = prices.shift(-horizon) / prices - 1
     hist = fwd[(scores >= strong_score) & fwd.notna()]
     base = fwd.dropna()
@@ -102,8 +128,8 @@ def diagnose(prices: pd.Series, volume: pd.Series, horizon: int = 20,
         "基准胜率": float((base > 0).mean()) if len(base) else np.nan,
         "基准平均": float(base.mean()) if len(base) else np.nan,
     }
-    return {"verdict": verdict, "note": note, "score": score, "total": len(row),
-            "checks": row.to_dict(), "detail": detail, "hist": stats,
+    return {"verdict": verdict, "note": note, "score": score, "total": TOTAL_SCORE,
+            "checks": row.to_dict(), "weights": CRITERIA_WEIGHTS, "detail": detail, "hist": stats,
             "date": today, "price": float(px), "series": prices,
             "ma": (ma5, ma20, ma60), "scores": scores, "horizon": horizon,
             "strong_score": strong_score}

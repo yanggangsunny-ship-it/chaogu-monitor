@@ -28,7 +28,10 @@ def _rsi_wide(px: pd.DataFrame, n: int = 14) -> pd.DataFrame:
 
 
 def trend_score(px: pd.DataFrame, vol: pd.DataFrame) -> pd.DataFrame:
-    """向量化的10项判据得分(与diagnosis.py逐股版本口径一致)"""
+    """向量化的加权判据得分,满分100(与diagnosis.py逐股版本口径一致)。
+    权重来自 run_weight_criteria.py 的实测(按各判据|t统计量|分配)"""
+    from diagnosis import CRITERIA_WEIGHTS as W
+
     ma5 = px.rolling(5, min_periods=3).mean()
     ma20 = px.rolling(20, min_periods=10).mean()
     ma60 = px.rolling(60, min_periods=30).mean()
@@ -36,20 +39,20 @@ def trend_score(px: pd.DataFrame, vol: pd.DataFrame) -> pd.DataFrame:
     rsi = _rsi_wide(px)
     low20 = px.rolling(20, min_periods=10).min()
 
-    checks = [
-        px > ma20,                       # 1 站上20日线
-        px > ma60,                       # 2 站上60日线
-        ma20 > ma20.shift(5),            # 3 20日线向上
-        ma60 > ma60.shift(10),           # 4 60日线向上
-        (ma5 > ma20) & (ma20 > ma60),    # 5 多头排列
-        px > px.shift(20),               # 6 20日涨幅为正
-        px > px.shift(60),               # 7 60日涨幅为正
-        vol > vol20,                     # 8 量能配合
-        rsi > 50,                        # 9 RSI>50
-        px > low20 * 1.02,               # 10 未跌破近20日低点
-    ]
+    checks = {
+        "站上20日线": px > ma20,
+        "站上60日线": px > ma60,
+        "20日线向上": ma20 > ma20.shift(5),
+        "60日线向上": ma60 > ma60.shift(10),
+        "多头排列": (ma5 > ma20) & (ma20 > ma60),
+        "20日涨幅为正": px > px.shift(20),
+        "60日涨幅为正": px > px.shift(60),
+        "量能配合": vol > vol20,
+        "RSI>50": rsi > 50,
+        "未跌破近20日低点": px > low20 * 1.02,
+    }
     valid = px.notna() & ma60.notna()
-    score = sum(c.astype(float) for c in checks)
+    score = sum(c.astype(float) * W[name] for name, c in checks.items())
     return score.where(valid)
 
 
