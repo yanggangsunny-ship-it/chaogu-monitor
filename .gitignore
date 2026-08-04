@@ -10,3 +10,8 @@ sendkeys.txt
 gold_state.json
 gold_price_history.csv
 anthropic_key.txt
+quant/cache/
+quant/output/
+quant/build/
+quant/dist/
+quant/__pycache__/
