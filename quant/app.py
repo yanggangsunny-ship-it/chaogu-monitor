@@ -208,6 +208,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sp_minscore.setSuffix(" 分以上")
         self.sp_topn = QtWidgets.QSpinBox(); self.sp_topn.setRange(1, 10); self.sp_topn.setValue(3)
         self.sp_topn.setSuffix(" 只/领域")
+        from screener import MODE_REVERSAL, MODE_STRONG
+        self.cb_mode = QtWidgets.QComboBox()
+        self.cb_mode.addItems([MODE_STRONG, MODE_REVERSAL])
+        self.cb_mode.setToolTip(
+            "强势=选跑赢同行的(历史检验t=-5.87,是吃亏的一边)\n"
+            "反转=选跑输同行的(与验证方向一致,日股是反转市场)")
+        self.sp_exc = QtWidgets.QDoubleSpinBox()
+        self.sp_exc.setRange(0, 50); self.sp_exc.setValue(5.0); self.sp_exc.setSuffix(" %")
+        self.sp_exc.setToolTip("同行超额门槛：强势模式=超额≥此值；反转模式=超额≤-此值")
         btn = QtWidgets.QPushButton("扫描今日")
         btn.setStyleSheet("font-weight:bold; padding:6px 18px;")
         btn.clicked.connect(self.on_scan)
@@ -216,7 +225,10 @@ class MainWindow(QtWidgets.QMainWindow):
         b_fav = QtWidgets.QPushButton("★ 收藏选中")
         b_fav.setToolTip("把选中的股票加入收藏")
         b_fav.clicked.connect(self.on_fav_from_tree)
-        for wd in (QtWidgets.QLabel("筛选:"), self.sp_minscore, self.sp_topn, btn, b_exp, b_col, b_fav):
+        for wd in (QtWidgets.QLabel("筛选:"), self.sp_minscore, self.sp_topn,
+                   QtWidgets.QLabel("方向:"), self.cb_mode,
+                   QtWidgets.QLabel("同行超额门槛:"), self.sp_exc,
+                   btn, b_exp, b_col, b_fav):
             bar.addWidget(wd)
         bar.addStretch()
         self.lbl_scan = QtWidgets.QLabel("请先加载数据")
@@ -224,10 +236,11 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.addLayout(bar)
 
         note = QtWidgets.QLabel(
-            "⚠这个得分= 诊断页那10项判据的合计，已验证**无预测力甚至反向**"
-            "(得分高者后20日胜率52.9% < 随机买入54.6%, t=-3.88)。\n"
-            "→ 本榜只回答「今天哪些股票技术面处于强势状态」，不是买入建议。"
-            "同行超额收益那一列是客观的相对强弱，参考价值更高。")
+            "⚠两个筛选条件的历史检验结果(Prime全市场10年，都是坏消息，如实告知)：\n"
+            "  · 10项判据得分：得分高者后20日胜率52.9% < 随机买入54.6% (t=-3.88) → 无预测力甚至反向\n"
+            "  · 同行超额20日：t=-5.87 显著为负 → **超额高的后续跑输**，「强势模式」是历史上吃亏的一边\n"
+            "  · 日股是反转市场(20日反转 t=+5.22)，「反转模式」才与验证方向一致\n"
+            "→ 本榜是状态筛选器，不是买入建议。选哪个方向由你决定，数据摆在这里。")
         note.setWordWrap(True)
         note.setStyleSheet("background:#fff3bf; padding:7px; border-radius:4px; font-size:12px;")
         lay.addWidget(note)
@@ -253,7 +266,8 @@ class MainWindow(QtWidgets.QMainWindow):
             from screener import scan, scan_summary
             vol = to_wide(self.panel, "volume", scrub=False)
             res = scan(self.prices, vol, min_score=self.sp_minscore.value(),
-                       top_n=self.sp_topn.value(), market=self.cb_market.currentText())
+                       top_n=self.sp_topn.value(), market=self.cb_market.currentText(),
+                       mode=self.cb_mode.currentText(), min_excess=self.sp_exc.value() / 100)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "扫描失败", traceback.format_exc()[-1200:])
             self.lbl_scan.setText("扫描失败")
@@ -281,7 +295,8 @@ class MainWindow(QtWidgets.QMainWindow):
         for i in range(7):
             self.tree_scr.resizeColumnToContents(i)
         d = self.prices.index[-1].date()
-        self.lbl_scan.setText(f"数据日期 {d} — {scan_summary(res)}")
+        self.lbl_scan.setText(f"数据 {d} | {self.cb_mode.currentText()} "
+                              f"超额门槛{self.sp_exc.value():.0f}% | {scan_summary(res)}")
         self.statusBar().showMessage(f"扫描完成: {scan_summary(res)}")
 
     def _tree_hint(self, item, col):
