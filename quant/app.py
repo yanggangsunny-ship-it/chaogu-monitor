@@ -249,12 +249,21 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.tree_scr = QtWidgets.QTreeWidget()
         self.tree_scr.setColumnCount(7)
-        self.tree_scr.setHeaderLabels(["领域 / 股票", "得分", "现价", "20日涨幅",
-                                       "同行超额", "60日涨幅", "公司名"])
+        self.tree_scr.setHeaderLabels(["领域 / 股票", "公司名", "得分", "现价",
+                                       "20日涨幅", "同行超额", "60日涨幅"])
         self.tree_scr.setAlternatingRowColors(True)
         self.tree_scr.itemDoubleClicked.connect(self.on_tree_pick)
         self.tree_scr.itemClicked.connect(self._tree_hint)
         lay.addWidget(self.tree_scr)
+
+        risk = QtWidgets.QLabel(
+            "📊 回调风险实测 — 过去20天涨跌 → 之后20天上涨概率 (Prime全市场10年,含涨幅越大越危险的证据)\n"
+            "   跌>20%: 63.3%↑   跌10-20%: 57.3%↑   跌0-10%: 55.4%↑   涨0-10%: 53.9%↑\n"
+            "   涨10-20%: 52.5%↑   涨20-30%: 51.3%↑   涨30-50%: 51.1%↑   涨>50%: 46.4%↑ (跌的概率过半)\n"
+            "   → 榜上20日涨幅超20%的已用橙色标出。涨得越猛，后续胜率越低，这是10年数据的结论。")
+        risk.setWordWrap(True)
+        risk.setStyleSheet("background:#e7f5ff; padding:7px; border-radius:4px; font-size:12px;")
+        lay.addWidget(risk)
         lay.addWidget(QtWidgets.QLabel("双击任意股票 → 自动跳转到「个股趋势诊断」并显示完整数据"))
         return w
 
@@ -277,18 +286,21 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.tree_scr.clear()
         for sector, rows in res.items():
-            top = QtWidgets.QTreeWidgetItem([f"【{sector}】", "", "", "", "",
-                                             "", f"{len(rows)}只入选"])
+            top = QtWidgets.QTreeWidgetItem([f"【{sector}】", f"{len(rows)}只入选",
+                                             "", "", "", "", ""])
             f = top.font(0); f.setBold(True); top.setFont(0, f)
             top.setBackground(0, QtCore.Qt.lightGray)
             for r in rows:
                 nm = getattr(self, "names", {}).get(r["ticker"], "")
                 child = QtWidgets.QTreeWidgetItem([
-                    r["ticker"], f"{r['score']}分", f"{r['price']:,.0f}",
-                    f"{r['chg20']:+.1%}", f"{r['excess20']:+.1%}", f"{r['chg60']:+.1%}", nm])
+                    r["ticker"], nm, f"{r['score']}分", f"{r['price']:,.0f}",
+                    f"{r['chg20']:+.1%}", f"{r['excess20']:+.1%}", f"{r['chg60']:+.1%}"])
                 child.setData(0, QtCore.Qt.UserRole, r["ticker"])
                 # 超额为正标红(相对同行强)，为负标绿
-                child.setForeground(4, QtCore.Qt.red if r["excess20"] > 0 else QtCore.Qt.darkGreen)
+                child.setForeground(5, QtCore.Qt.red if r["excess20"] > 0 else QtCore.Qt.darkGreen)
+                # 20日涨幅过大(>20%)标橙提示回调风险
+                if r["chg20"] > 0.20:
+                    child.setForeground(4, QtCore.Qt.darkYellow)
                 top.addChild(child)
             if not rows:
                 top.addChild(QtWidgets.QTreeWidgetItem(["(无符合条件的股票)"]))
