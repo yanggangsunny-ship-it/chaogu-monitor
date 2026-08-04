@@ -176,9 +176,10 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs.addTab(self._tab_data(), "① 数据")
         tabs.addTab(self._tab_screener(), "② 每日领域榜 ★")
         tabs.addTab(self._tab_diagnosis(), "③ 个股趋势诊断")
-        tabs.addTab(self._tab_backtest(), "④ 因子回测(研究用)")
-        tabs.addTab(self._tab_signal(), "⑤ 信号点位")
-        tabs.addTab(self._tab_log(), "⑥ 试验登记册")
+        tabs.addTab(self._tab_portfolio(), "④ 我的持仓 ★")
+        tabs.addTab(self._tab_backtest(), "⑤ 因子回测(研究用)")
+        tabs.addTab(self._tab_signal(), "⑥ 信号点位")
+        tabs.addTab(self._tab_log(), "⑦ 试验登记册")
         self.setCentralWidget(tabs)
         self.tab_diag_index = 2
         self.statusBar().showMessage("启动中 — 正在检查数据是否最新…")
@@ -265,6 +266,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cb_ticker.clear(); self.cb_ticker.addItems(labels)
         self.cb_dx.clear(); self.cb_dx.addItems(labels)
         self._refresh_fav()
+        self._load_pos_table()
         self.txt_data.appendPlainText(
             f"\n[已加载] {self.prices.shape[1]}只 × {self.prices.shape[0]}交易日 "
             f"| {self.prices.index.min().date()} ~ {self.prices.index.max().date()}"
@@ -494,6 +496,215 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_fav()
         self.statusBar().showMessage(
             f"已收藏 {len(added)} 只: {', '.join(added)}" if added else "未选中股票(或已在收藏中)")
+
+    # ---------- 我的持仓 ----------
+    def _tab_portfolio(self):
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w)
+        bar = QtWidgets.QHBoxLayout()
+        b_calc = QtWidgets.QPushButton("刷新盈亏 + 情景测算")
+        b_calc.setStyleSheet("font-weight:bold; padding:6px 16px;")
+        b_calc.clicked.connect(self.on_portfolio)
+        b_add = QtWidgets.QPushButton("＋ 添加持仓"); b_add.clicked.connect(self.on_pos_add)
+        b_del = QtWidgets.QPushButton("－ 删除选中"); b_del.clicked.connect(self.on_pos_del)
+        b_save = QtWidgets.QPushButton("保存改动"); b_save.clicked.connect(self.on_pos_save)
+        for x in (b_calc, b_add, b_del, b_save):
+            bar.addWidget(x)
+        bar.addStretch()
+        self.lbl_pf = QtWidgets.QLabel("")
+        self.lbl_pf.setStyleSheet("font-size:14px; font-weight:bold;")
+        bar.addWidget(self.lbl_pf)
+        lay.addLayout(bar)
+
+        split = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        # 上：持仓表(可编辑数量/成本)
+        up = QtWidgets.QWidget(); ul = QtWidgets.QVBoxLayout(up)
+        ul.addWidget(QtWidgets.QLabel(
+            "持仓明细(数量/成本可直接双击修改，改完点「保存改动」；数据存 portfolio.json)"))
+        self.tbl_pos = QtWidgets.QTableWidget()
+        self.tbl_pos.setColumnCount(10)
+        self.tbl_pos.setHorizontalHeaderLabels(
+            ["代码", "公司名", "类别", "数量", "成本", "现价", "市值", "盈亏", "盈亏%", "上行/下行"])
+        self.tbl_pos.itemSelectionChanged.connect(self._on_pos_select)
+        ul.addWidget(self.tbl_pos)
+        split.addWidget(up)
+        # 下：情景测算
+        dn = QtWidgets.QWidget(); dl = QtWidgets.QVBoxLayout(dn)
+        dl.addWidget(QtWidgets.QLabel("情景测算(点上方任一行查看该股详情)"))
+        self.txt_pf = QtWidgets.QPlainTextEdit(readOnly=True)
+        self.txt_pf.setStyleSheet("font-family: Consolas, monospace; font-size:12px;")
+        dl.addWidget(self.txt_pf)
+        split.addWidget(dn)
+        split.setSizes([380, 420])
+        lay.addWidget(split)
+        return w
+
+    def _load_pos_table(self):
+        import portfolio
+        rows = portfolio.load()
+        t = self.tbl_pos
+        t.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            for j, v in enumerate([r["ticker"], r.get("name", ""), r.get("kind", "现物"),
+                                   str(r["qty"]), f"{r['cost']:g}"]):
+                it = QtWidgets.QTableWidgetItem(v)
+                if j in (0, 1, 2):     # 代码/名称/类别只读
+                    it.setFlags(it.flags() & ~QtCore.Qt.ItemIsEditable)
+                t.setItem(i, j, it)
+            for j in range(5, 10):
+                t.setItem(i, j, QtWidgets.QTableWidgetItem(""))
+        t.resizeColumnsToContents()
+        return rows
+
+    def on_pos_add(self):
+        tk, ok = QtWidgets.QInputDialog.getText(self, "添加持仓", "股票代码(如 7011 或 7011.T):")
+        if not ok or not tk.strip():
+            return
+        tk = self._to_ticker(tk)
+        qty, ok = QtWidgets.QInputDialog.getInt(self, "添加持仓", f"{tk} 持股数量:", 100, 1, 10 ** 7)
+        if not ok:
+            return
+        cost, ok = QtWidgets.QInputDialog.getDouble(self, "添加持仓", f"{tk} 成本单价(円):",
+                                                    1000.0, 0.01, 10 ** 7, 2)
+        if not ok:
+            return
+        kind, ok = QtWidgets.QInputDialog.getItem(self, "添加持仓", "类别:", ["现物", "信用买"], 0, False)
+        if not ok:
+            return
+        import portfolio
+        rows = portfolio.load()
+        rows.append({"ticker": tk, "name": getattr(self, "names", {}).get(tk, ""),
+                     "qty": qty, "cost": cost, "kind": kind})
+        portfolio.save(rows)
+        self._load_pos_table()
+        self.statusBar().showMessage(f"已添加 {tk}")
+
+    def on_pos_del(self):
+        rows_sel = {i.row() for i in self.tbl_pos.selectedItems()}
+        if not rows_sel:
+            return
+        import portfolio
+        rows = portfolio.load()
+        keep = [r for i, r in enumerate(rows) if i not in rows_sel]
+        portfolio.save(keep)
+        self._load_pos_table()
+        self.statusBar().showMessage(f"已删除 {len(rows) - len(keep)} 条")
+
+    def on_pos_save(self):
+        import portfolio
+        rows = portfolio.load()
+        for i, r in enumerate(rows):
+            if i >= self.tbl_pos.rowCount():
+                break
+            try:
+                r["qty"] = int(float(self.tbl_pos.item(i, 3).text()))
+                r["cost"] = float(self.tbl_pos.item(i, 4).text())
+            except (ValueError, AttributeError):
+                continue
+        portfolio.save(rows)
+        self.statusBar().showMessage("持仓已保存")
+        self.on_portfolio()
+
+    def on_portfolio(self):
+        if self.prices is None:
+            QtWidgets.QMessageBox.warning(self, "提示", "请先在「数据」页加载面板")
+            return
+        import portfolio
+        from levels import trade_levels
+        rows = self._load_pos_table()
+        if not rows:
+            self.lbl_pf.setText("无持仓")
+            return
+        self.statusBar().showMessage("测算中…")
+        QtWidgets.QApplication.processEvents()
+        hi = to_wide(self.panel, "high"); lo = to_wide(self.panel, "low")
+        vol = to_wide(self.panel, "volume", scrub=False)
+        self._pf_results = []
+        for i, r in enumerate(rows):
+            tk = r["ticker"]
+            if tk not in self.prices.columns:
+                continue
+            price = float(self.prices[tk].dropna().iloc[-1])
+            lv = None
+            try:
+                lv = trade_levels(hi[tk].dropna(), lo[tk].dropna(),
+                                  self.prices[tk].dropna(), vol[tk].dropna())
+            except Exception:
+                pass
+            a = portfolio.analyze(r, price, lv)
+            a["_levels"] = lv
+            self._pf_results.append(a)
+            for j, v in [(5, f"{price:,.0f}"), (6, f"{a['value']:,.0f}"),
+                         (7, f"{a['pnl']:+,.0f}"), (8, f"{a['pnl_pct']:+.1f}%"),
+                         (9, f"{a.get('ratio', float('nan')):.2f}" if a.get("ratio") == a.get("ratio") else "-")]:
+                it = QtWidgets.QTableWidgetItem(v)
+                it.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+                if j in (7, 8):
+                    it.setForeground(QtCore.Qt.red if a["pnl"] >= 0 else QtCore.Qt.darkGreen)
+                self.tbl_pos.setItem(i, j, it)
+        self.tbl_pos.resizeColumnsToContents()
+
+        t = portfolio.totals(self._pf_results)
+        self.lbl_pf.setText(
+            f"总市值 {t['value']:,.0f}円   成本 {t['cost_amt']:,.0f}円   "
+            f"盈亏 {t['pnl']:+,.0f}円 ({t['pnl_pct']:+.1f}%)")
+        self.lbl_pf.setStyleSheet(
+            f"font-size:14px; font-weight:bold; color:{'#c92a2a' if t['pnl'] >= 0 else '#2f9e44'};")
+
+        L = ["══ 组合层面情景测算 ══",
+             f"  当前     : 市值 {t['value']:>12,.0f}円   盈亏 {t['pnl']:>+11,.0f}円 ({t['pnl_pct']:+.1f}%)"]
+        for k, lbl in [("T1", "全部到T1"), ("T2", "全部到T2"), ("T3", "全部到T3"), ("stop", "全部跌破止损")]:
+            d = t[k] - t["pnl"]
+            L.append(f"  {lbl:<9}: 盈亏 {t[k]:>+11,.0f}円   (相对现在 {d:+,.0f}円)")
+        L += ["", "  ↑「全部到T1」= 假设每只都涨到各自第一道压力位时的组合盈亏。",
+              "    这是极端情景不是预测——实际不可能所有股票同时到位。",
+              "", "── 逐只明细(点上方行看单只详情) ──"]
+        for a in self._pf_results:
+            L.append(f"  {a['ticker']:<9}{a['name'][:14]:<16}{a['pnl']:>+10,.0f}円"
+                     f" ({a['pnl_pct']:+6.1f}%)   上行/下行 "
+                     + (f"{a.get('ratio'):.2f}" if a.get("ratio") == a.get("ratio") else "-"))
+        self.txt_pf.setPlainText("\n".join(L))
+        self.statusBar().showMessage("持仓测算完成")
+
+    def _on_pos_select(self):
+        """点某一行 → 显示该股的完整情景测算"""
+        if not getattr(self, "_pf_results", None):
+            return
+        rows = {i.row() for i in self.tbl_pos.selectedItems()}
+        if len(rows) != 1:
+            return
+        i = rows.pop()
+        if i >= len(self._pf_results):
+            return
+        a = self._pf_results[i]
+        lv = a.get("_levels")
+        L = [f"══ {a['ticker']}  {a['name']}  [{a['kind']}] ══",
+             f"  持有 {a['qty']:,}股   成本 {a['cost']:,.2f}円   现价 {a['price']:,.0f}円",
+             f"  投入 {a['cost_amt']:,.0f}円 → 市值 {a['value']:,.0f}円   "
+             f"当前盈亏 {a['pnl']:+,.0f}円 ({a['pnl_pct']:+.1f}%)", ""]
+        if not a["scenarios"]:
+            L.append("  (无法计算价位，可能数据不足)")
+        else:
+            L.append(f"  {'情景':<12}{'目标价':>10}{'需涨跌':>9}{'届时总盈亏':>14}{'盈亏%':>9}{'较现在':>13}")
+            L.append("  " + "─" * 68)
+            for s in a["scenarios"]:
+                tag = "↑" if s["kind"] == "上行" else "↓"
+                L.append(f"  {tag}{s['name']:<11}{s['price']:>10,.0f}{s['move_pct']:>+8.1f}%"
+                         f"{s['pnl']:>+14,.0f}{s['pnl_pct']:>+8.1f}%{s['delta']:>+13,.0f}")
+            if a.get("ratio") == a.get("ratio"):
+                L += ["", f"  最大上行空间 {a['upside']:+,.0f}円   "
+                          f"最大下行风险 {a['downside']:+,.0f}円   "
+                          f"上行/下行 = {a['ratio']:.2f}"]
+                L.append("  " + ("→ 上行空间大于下行风险" if a["ratio"] > 1
+                                 else "→ ⚠下行风险大于上行空间，这个位置持有性价比不佳"))
+        if lv:
+            L += ["", f"  参考价位: 支撑 " + " / ".join(f"{x['price']:,.0f}" for x in lv["support"][:3])
+                  + "    压力 " + " / ".join(f"{x['price']:,.0f}" for x in lv["resistance"][:3]),
+                  f"  ATR(14) {lv['atr']:,.0f}円  日均波动 {lv['atr'] / lv['price']:.1%}"]
+        L += ["", "⚠「届时总盈亏」是价格到达该位时的账面盈亏(含已有浮盈亏)，",
+              "  「较现在」是相对当前市值的变化。目标位来自压力位，不是预测，",
+              "  价格未必会到，也可能穿过。信用仓还需另计利息成本。"]
+        self.txt_pf.setPlainText("\n".join(L))
 
     # ---------- 个股趋势诊断页 ----------
     def _tab_diagnosis(self):
@@ -759,14 +970,34 @@ class MainWindow(QtWidgets.QMainWindow):
             L.append(f"  {x['price']:>9,.0f}  ({x['dist_pct']:+5.1f}%)  历史守住 {hold}"
                      + ("  ★筹码密集" if x["is_poc"] else ""))
         L += ["", "── 机械参考位(算法输出,非建议) ──",
-              f"  买入参考: {r['entry']:,.0f}   (最近支撑上方0.5%)",
-              f"  止损位  : {r['stop']:,.0f}   ({r['stop_pct']:+.1f}%, 支撑下方2倍ATR)",
-              f"  目标位  : {r['target']:,.0f}   ({r['target_pct']:+.1f}%, 最近压力)",
-              f"  盈亏比  : {r['risk_reward']:.2f}" if r["risk_reward"] == r["risk_reward"] else "",
-              "",
-              "「历史守住 x/y」= 价格曾y次接近该位,其中x次未被有效突破。",
-              "y次数少或x/y比例低的线不可靠。盈亏比<1表示风险大于潜在收益。",
-              "⚠支撑压力是经验规律不是定律,机械参考位仅为算法输出,不构成建议。"]
+              f"  买入参考: {r['entry']:>9,.0f}   (最近支撑上方0.5%)",
+              f"  止损位  : {r['stop']:>9,.0f}   ({r['stop_pct']:+.1f}%, 支撑下方2倍ATR)",
+              f"  单笔风险: {r['risk']:>9,.0f}円/股  (买入价−止损价)", "",
+              f"  目标(来源:{r['target_src']}):"]
+        for t in r.get("targets", []):
+            flag = "  ✓盈亏比达标" if t["rr"] >= 1 else ""
+            flag = "  ★盈亏比优秀" if t["rr"] >= 2 else flag
+            L.append(f"    {t['name']}: {t['price']:>9,.0f}  ({t['pct']:+5.1f}%)"
+                     f"  盈亏比 {t['rr']:.2f}{flag}")
+        ok, good = r.get("rr_ok_target"), r.get("rr_good_target")
+        if good:
+            L.append(f"  → 涨到 {good['name']}({good['price']:,.0f}) 时盈亏比才达2.0，"
+                     f"这是「值得冒险」的位置")
+        elif ok:
+            L.append(f"  → 涨到 {ok['name']}({ok['price']:,.0f}) 时盈亏比才够1.0，"
+                     f"T1之前都是「赚得比亏得少」")
+        else:
+            L.append("  → ⚠所有目标的盈亏比都<1：按这个止损位，潜在收益盖不住风险")
+        L += ["",
+              "【怎么读这几个数】",
+              "· T1(第一道压力)离得近是必然的——它是「价格可能卡住的地方」，不是盈利目标。",
+              "  真正该问的是:「盈亏比≥1 要涨到第几档」。若T3才够，说明这笔要拿很久。",
+              "· 盈亏比 = 潜在赚幅 ÷ 潜在亏幅。<1 = 赌赢了赚得还没赌输了亏得多。",
+              "· 止损放在支撑下方2倍ATR(日常波动之外)，所以止损幅度看着大——",
+              "  这是为了不被随机波动扫出局，代价就是盈亏比被压低。",
+              "  想要更高盈亏比，要么等价格更靠近支撑再买，要么接受更紧(更易被扫)的止损。",
+              "· 「历史守住 x/y」= 价格曾y次接近该位，其中x次未被有效突破；y太小=样本不足不可信。",
+              "⚠支撑压力是经验规律不是定律，以上均为算法输出，不构成建议。"]
         self.txt_lv.setPlainText("\n".join(x for x in L if x != ""))
         return r
 

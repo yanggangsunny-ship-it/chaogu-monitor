@@ -131,18 +131,41 @@ def key_levels(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Ser
 def trade_levels(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series,
                  atr_mult_stop: float = 2.0, lookback: int = 250) -> dict:
     """机械算出的参考买卖位(不是建议):
-      · 买入参考 = 最近支撑上方一点(回踩不破才进)
-      · 止损     = 支撑下方 atr_mult_stop 倍ATR (避开日常波动)
-      · 目标     = 最近压力位
-      · 盈亏比   = (目标-买入)/(买入-止损)"""
+      · 买入参考 = 最近支撑上方0.5%(回踩不破才进)
+      · 止损     = 支撑下方 atr_mult_stop 倍ATR (放在日常波动之外)
+      · 目标T1/T2/T3 = 上方第1/2/3条压力位，**各自算盈亏比**
+        ⚠T1只是"第一道阻挡"不是盈利目标——离得近是必然的。
+          真正该看的是「盈亏比≥1的是第几档目标」，那才是这笔交易有没有空间。
+      · 若上方无压力位(创新高) → 用ATR倍数给参考目标"""
     kl = key_levels(high, low, close, volume, lookback)
     px, a = kl["price"], atr(high, low, close)
     sup = kl["support"][0]["price"] if kl["support"] else px - 2 * a
-    res = kl["resistance"][0]["price"] if kl["resistance"] else px + 2 * a
     entry = sup * 1.005
     stop = sup - atr_mult_stop * a
-    rr = (res - entry) / (entry - stop) if entry > stop else np.nan
-    return {**kl, "atr": a, "entry": entry, "stop": stop, "target": res,
-            "risk_reward": rr,
+    risk = entry - stop
+
+    res_list = [x["price"] for x in kl["resistance"] if x["price"] > entry]
+    if not res_list:                      # 创新高/无压力 → ATR倍数兜底
+        res_list = [entry + k * a for k in (3, 5, 8)]
+        target_src = "ATR倍数(上方无压力位)"
+    else:
+        target_src = "压力位"
+
+    targets = []
+    for i, r in enumerate(res_list[:3], 1):
+        targets.append({
+            "name": f"T{i}", "price": r,
+            "pct": (r - entry) / entry * 100,
+            "rr": (r - entry) / risk if risk > 0 else np.nan,
+        })
+    # 盈亏比首次≥1和≥2的目标
+    first_1 = next((t for t in targets if t["rr"] >= 1), None)
+    first_2 = next((t for t in targets if t["rr"] >= 2), None)
+
+    return {**kl, "atr": a, "entry": entry, "stop": stop, "risk": risk,
+            "targets": targets, "target_src": target_src,
+            "target": targets[0]["price"] if targets else np.nan,      # 兼容旧调用
+            "risk_reward": targets[0]["rr"] if targets else np.nan,
+            "rr_ok_target": first_1, "rr_good_target": first_2,
             "stop_pct": (stop - entry) / entry * 100,
-            "target_pct": (res - entry) / entry * 100}
+            "target_pct": targets[0]["pct"] if targets else np.nan}
