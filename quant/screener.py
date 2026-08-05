@@ -23,6 +23,19 @@ from sectors_custom import ORDER, build_sectors
 #            人工少量持有、低换手的场景成本低得多，不能直接照搬那个结论。
 MODE_STRONG = "强势(超额高)"
 MODE_REVERSAL = "反转(超额低)"
+# 超跌反弹：找最近大跌、可能反弹的股票。
+# ⚠此模式下「得分门槛」会自动反向(变成"得分≤X")——因为得分是动量指标，
+#   刚暴跌的股票得分必然很低，若还用"80分以上"筛，会把目标全部排除(这曾是个真bug)。
+# 数据支持：跌>20%档位后20日胜率63.3%/平均+5.15%，是所有档位里最好的(全样本54.6%/+1.26%)
+MODE_OVERSOLD = "超跌反弹(跌幅大)"
+
+
+def _rsi_last(close: pd.Series, n: int = 14) -> float:
+    d = close.diff()
+    up = d.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
+    dn = (-d.clip(upper=0)).ewm(alpha=1 / n, adjust=False).mean()
+    r = 100 - 100 / (1 + up / dn.replace(0, np.nan))
+    return float(r.iloc[-1]) if len(r) and pd.notna(r.iloc[-1]) else np.nan
 
 
 def entry_zone(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series,
@@ -54,6 +67,8 @@ def scan(prices: pd.DataFrame, volume: pd.DataFrame, min_score: int = 80,
     last = score.index[-1]
     px = prices
     reversal = mode == MODE_REVERSAL
+    oversold = mode == MODE_OVERSOLD
+    vol20_all = volume.rolling(20, min_periods=10).mean()
 
     out = {}
     for name in ORDER:
@@ -68,23 +83,47 @@ def scan(prices: pd.DataFrame, volume: pd.DataFrame, min_score: int = 80,
         rows = []
         for t in members:
             s = score.at[last, t] if t in score.columns else np.nan
-            if not np.isfinite(s) or s < min_score:
+            if not np.isfinite(s):
+                continue
+            # ⚠超跌模式下得分门槛必须反向：动量得分高=近期强势,那正是我们要排除的
+            if oversold:
+                if s > min_score:
+                    continue
+            elif s < min_score:
                 continue
             c20 = float(px[t].iloc[-1] / px[t].iloc[-21] - 1)
             if not np.isfinite(c20):
                 continue
             exc = c20 - med20
-            if reversal:
+            if oversold:
+                if c20 > -min_excess:      # 超跌模式:20日跌幅要够大(门槛复用同一个输入框)
+                    continue
+            elif reversal:
                 if exc > -min_excess:      # 反转模式:要跑输同行到一定程度
                     continue
             elif exc < min_excess:         # 强势模式:要跑赢同行到一定程度
                 continue
             c60 = float(px[t].iloc[-1] / px[t].iloc[-61] - 1)
-            rows.append({
+            row = {
                 "ticker": t, "score": float(s), "price": float(px[t].iloc[-1]),
                 "chg20": c20, "chg60": c60, "excess20": exc,
-            })
-        rows.sort(key=lambda r: (-r["score"], r["excess20"] if reversal else -r["excess20"]))
+            }
+            if oversold:      # 超跌模式补充判断反弹条件的指标
+                cl = px[t].dropna()
+                row["rsi"] = _rsi_last(cl)
+                low52 = float(cl.tail(250).min())
+                row["off_low52"] = (row["price"] - low52) / low52     # 距52周低点
+                v, v20 = volume[t].iloc[-1], vol20_all[t].iloc[-1]
+                row["vol_ratio"] = float(v / v20) if pd.notna(v) and v20 else np.nan
+                # 企稳迹象：今日收阳 + 缩量(抛压减轻)
+                row["up_today"] = bool(cl.iloc[-1] > cl.iloc[-2]) if len(cl) > 1 else False
+                row["shrink"] = bool(row["vol_ratio"] < 1) if row["vol_ratio"] == row["vol_ratio"] else False
+                row["stabilizing"] = row["up_today"] and row["shrink"]
+            rows.append(row)
+        if oversold:
+            rows.sort(key=lambda r: r["chg20"])            # 跌得最狠的排前面
+        else:
+            rows.sort(key=lambda r: (-r["score"], r["excess20"] if reversal else -r["excess20"]))
         rows = rows[:top_n]
         # 只对入选的少数股票算买入区(trade_levels较重,不能全池跑)
         if highs is not None and lows is not None:

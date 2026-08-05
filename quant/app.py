@@ -296,15 +296,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sp_minscore.setSuffix(" 分以上(满分100)")
         self.sp_topn = QtWidgets.QSpinBox(); self.sp_topn.setRange(1, 10); self.sp_topn.setValue(3)
         self.sp_topn.setSuffix(" 只/领域")
-        from screener import MODE_REVERSAL, MODE_STRONG
+        from screener import MODE_OVERSOLD, MODE_REVERSAL, MODE_STRONG
         self.cb_mode = QtWidgets.QComboBox()
-        self.cb_mode.addItems([MODE_STRONG, MODE_REVERSAL])
+        self.cb_mode.addItems([MODE_STRONG, MODE_REVERSAL, MODE_OVERSOLD])
         self.cb_mode.setToolTip(
-            "强势=选跑赢同行的(历史检验t=-5.87,是吃亏的一边)\n"
-            "反转=选跑输同行的(与验证方向一致,日股是反转市场)")
+            "强势  = 选跑赢同行的(历史检验t=-5.87,是吃亏的一边)\n"
+            "反转  = 选跑输同行的(在强势股里挑相对弱的)\n"
+            "超跌反弹 = 找最近大跌的股票 ← 想抄底选这个\n"
+            "         (此模式下得分门槛自动反向为「≤X分」，否则大跌股会被动量得分筛光)")
+        self.cb_mode.currentTextChanged.connect(self._on_mode_change)
         self.sp_exc = QtWidgets.QDoubleSpinBox()
         self.sp_exc.setRange(0, 50); self.sp_exc.setValue(5.0); self.sp_exc.setSuffix(" %")
-        self.sp_exc.setToolTip("同行超额门槛：强势模式=超额≥此值；反转模式=超额≤-此值")
+        self.lbl_exc = QtWidgets.QLabel("同行超额门槛:")
+        self.sp_exc.setToolTip("强势模式=超额≥此值；反转模式=超额≤-此值；超跌模式=20日跌幅≥此值")
         self.sp_zone = QtWidgets.QDoubleSpinBox()
         self.sp_zone.setRange(1, 20); self.sp_zone.setValue(5.0); self.sp_zone.setSuffix(" %")
         self.sp_zone.setToolTip("现价落在「买入参考位」±此范围内 → 整行绿色高亮")
@@ -323,7 +327,7 @@ class MainWindow(QtWidgets.QMainWindow):
         b_track.clicked.connect(self.on_track_from_tree)
         for wd in (QtWidgets.QLabel("筛选:"), self.sp_minscore, self.sp_topn,
                    QtWidgets.QLabel("方向:"), self.cb_mode,
-                   QtWidgets.QLabel("同行超额门槛:"), self.sp_exc,
+                   self.lbl_exc, self.sp_exc,
                    QtWidgets.QLabel("买入区范围:"), self.sp_zone,
                    btn, b_exp, b_col, b_fav, b_track):
             bar.addWidget(wd)
@@ -413,6 +417,22 @@ class MainWindow(QtWidgets.QMainWindow):
                 t.setItem(i, j, it)
         t.resizeColumnsToContents()
 
+    def _on_mode_change(self, mode: str):
+        """超跌模式下把两个门槛的含义和默认值一起切过去，避免用户被误导"""
+        from screener import MODE_OVERSOLD
+        if mode == MODE_OVERSOLD:
+            self.lbl_exc.setText("20日跌幅≥:")
+            self.sp_exc.setValue(10.0)
+            self.sp_minscore.setPrefix("得分≤ ")
+            self.sp_minscore.setValue(40)
+            self.sp_minscore.setToolTip("超跌模式下门槛反向：只要得分低于此值的(技术面弱势)股票")
+        else:
+            self.lbl_exc.setText("同行超额门槛:")
+            self.sp_exc.setValue(5.0)
+            self.sp_minscore.setPrefix("")
+            self.sp_minscore.setValue(80)
+            self.sp_minscore.setToolTip("")
+
     def on_scan(self):
         if self.prices is None:
             QtWidgets.QMessageBox.warning(self, "提示", "请先在「数据」页加载面板")
@@ -432,29 +452,66 @@ class MainWindow(QtWidgets.QMainWindow):
             self.lbl_scan.setText("扫描失败")
             return
 
+        from screener import MODE_OVERSOLD
+        is_os = self.cb_mode.currentText() == MODE_OVERSOLD
+        self.tree_scr.setHeaderLabels(
+            ["领域 / 股票", "公司名", "得分", "现价", "买入参考", "距买入位",
+             "20日跌幅" if is_os else "20日涨幅",
+             "RSI" if is_os else "同行超额",
+             "距52周低" if is_os else "60日涨幅"]
+            + (["量比", "企稳迹象"] if is_os else []))
+        self.tree_scr.setColumnCount(11 if is_os else 9)
+
         self.tree_scr.clear()
         for sector, rows in res.items():
             n_zone = sum(1 for r in rows if r.get("in_zone"))
-            top = QtWidgets.QTreeWidgetItem([
-                f"【{sector}】", f"{len(rows)}只入选" + (f"  ⭐{n_zone}只在买入区" if n_zone else ""),
-                "", "", "", "", "", "", ""])
+            n_stab = sum(1 for r in rows if r.get("stabilizing"))
+            tag = f"{len(rows)}只入选"
+            if is_os and n_stab:
+                tag += f"  🟢{n_stab}只现企稳迹象"
+            elif n_zone:
+                tag += f"  ⭐{n_zone}只在买入区"
+            ncol = 11 if is_os else 9
+            top = QtWidgets.QTreeWidgetItem([f"【{sector}】", tag] + [""] * (ncol - 2))
             f = top.font(0); f.setBold(True); top.setFont(0, f)
             top.setBackground(0, QtCore.Qt.lightGray)
             for r in rows:
                 nm = getattr(self, "names", {}).get(r["ticker"], "")
                 entry = r.get("entry")
                 gap = r.get("entry_gap")
-                child = QtWidgets.QTreeWidgetItem([
-                    r["ticker"], nm, f"{r['score']:.0f}分", f"{r['price']:,.0f}",
-                    f"{entry:,.0f}" if entry else "-",
-                    f"{gap:+.1%}" if gap is not None else "-",
-                    f"{r['chg20']:+.1%}", f"{r['excess20']:+.1%}", f"{r['chg60']:+.1%}"])
+                base = [r["ticker"], nm, f"{r['score']:.0f}分", f"{r['price']:,.0f}",
+                        f"{entry:,.0f}" if entry else "-",
+                        f"{gap:+.1%}" if gap is not None else "-",
+                        f"{r['chg20']:+.1%}"]
+                if is_os:
+                    rsi = r.get("rsi", float("nan"))
+                    base += [f"{rsi:.0f}" if rsi == rsi else "-",
+                             f"{r.get('off_low52', float('nan')):+.1%}"
+                             if r.get("off_low52") == r.get("off_low52") else "-",
+                             f"{r.get('vol_ratio', float('nan')):.1f}倍"
+                             if r.get("vol_ratio") == r.get("vol_ratio") else "-",
+                             ("🟢收阳+缩量" if r.get("stabilizing") else
+                              ("收阳" if r.get("up_today") else
+                               ("缩量" if r.get("shrink") else "—")))]
+                else:
+                    base += [f"{r['excess20']:+.1%}", f"{r['chg60']:+.1%}"]
+                child = QtWidgets.QTreeWidgetItem(base)
                 child.setData(0, QtCore.Qt.UserRole, r["ticker"])
-                child.setForeground(7, QtCore.Qt.red if r["excess20"] > 0 else QtCore.Qt.darkGreen)
-                if r["chg20"] > 0.20:              # 涨幅过大→回调风险
-                    child.setForeground(6, QtCore.Qt.darkYellow)
+                if is_os:
+                    child.setForeground(6, QtCore.Qt.darkGreen)      # 跌幅列
+                    rsi = r.get("rsi", float("nan"))
+                    if rsi == rsi and rsi <= 30:                      # RSI超卖标橙
+                        it_rsi = child.foreground(7)
+                        child.setForeground(7, QtGui.QColor("#e8590c"))
+                    if r.get("stabilizing"):
+                        for c in range(ncol):
+                            child.setBackground(c, QtGui.QColor("#d3f9d8"))
+                else:
+                    child.setForeground(7, QtCore.Qt.red if r["excess20"] > 0 else QtCore.Qt.darkGreen)
+                    if r["chg20"] > 0.20:          # 涨幅过大→回调风险
+                        child.setForeground(6, QtCore.Qt.darkYellow)
                 if r.get("in_zone"):               # 现价在买入参考位±5%内 → 整行高亮
-                    for c in range(9):
+                    for c in range(ncol):
                         child.setBackground(c, QtGui.QColor("#d3f9d8"))
                     ft = child.font(0); ft.setBold(True)
                     for c in (0, 1, 4, 5):
@@ -470,11 +527,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 top.addChild(QtWidgets.QTreeWidgetItem(["(无符合条件的股票)"]))
             self.tree_scr.addTopLevelItem(top)
         self.tree_scr.expandAll()
-        for i in range(7):
+        for i in range(self.tree_scr.columnCount()):
             self.tree_scr.resizeColumnToContents(i)
         d = self.prices.index[-1].date()
-        self.lbl_scan.setText(f"数据 {d} | {self.cb_mode.currentText()} "
-                              f"超额门槛{self.sp_exc.value():.0f}% | {scan_summary(res)}")
+        cond = (f"跌幅≥{self.sp_exc.value():.0f}% 得分≤{self.sp_minscore.value()}"
+                if is_os else f"超额门槛{self.sp_exc.value():.0f}%")
+        self.lbl_scan.setText(f"数据 {d} | {self.cb_mode.currentText()} {cond} | {scan_summary(res)}")
         self.statusBar().showMessage(f"扫描完成: {scan_summary(res)}")
 
     def _tree_hint(self, item, col):
