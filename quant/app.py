@@ -1042,8 +1042,10 @@ class MainWindow(QtWidgets.QMainWindow):
             "   ② 成交量密集区：近250日成交量按价格分40档，量最大的档位(POC)——"
             "那里套牢盘和获利盘最多，天然形成阻力\n"
             "   现价之下的叫支撑，之上的叫压力\n"
-            "· 「历史守住 x/y」← 历史上价格y次接近该线(±1.5%内)，"
-            "其中x次在随后5日内没被有效突破(超出2%)。y太小或x/y太低=这条线不可靠\n"
+            "· 压力位「挡回 x/y」← 历史上价格y次涨到该线附近(±1.5%内)，"
+            "其中x次在随后5日被挡下来(未涨破2%以上)；剩下 y−x 次是成功突破\n"
+            "· 支撑位「托住 x/y」← 同理，y次跌到该线附近，x次被撑住，y−x 次跌破\n"
+            "  (次数少于5次的线样本不足，比率再漂亮也别当真)\n"
             "· ATR(14) ← 近14日「真实波幅」均值，代表这只股票每天正常波动多少円\n"
             "· 买入参考 = 最近支撑位 × 1.005（回踩到支撑上方一点）\n"
             "· 止损位　 = 最近支撑位 − 2×ATR（放在日常波动之外，避免被随机噪音扫掉）\n"
@@ -1256,15 +1258,31 @@ class MainWindow(QtWidgets.QMainWindow):
             return None
         L = [f"现价 {r['price']:,.0f}円   ATR(14) {r['atr']:,.0f}円 (日均波动 {r['atr'] / r['price']:.1%})",
              f"筹码密集价(POC) {r['poc']:,.0f}円" if r["poc"] == r["poc"] else "", "",
-             "── 压力位(上方) ──"]
+             "── 压力位(上方) ── 「挡回N次/试探M次」= 涨到这里被挡下来几次"]
         for x in r["resistance"]:
-            hold = f"{x['held']}/{x['tested']}" if x["tested"] else "-"
-            L.append(f"  {x['price']:>9,.0f}  ({x['dist_pct']:+5.1f}%)  历史守住 {hold}"
+            if x["tested"]:
+                broke = x["tested"] - x["held"]
+                rate = x["held"] / x["tested"]
+                txt = (f"挡回 {x['held']}/{x['tested']} 次 (突破过{broke}次, "
+                       f"挡回率{rate:.0%})")
+                if x["tested"] < 5:
+                    txt += " ⚠样本少"
+            else:
+                txt = "无历史测试记录"
+            L.append(f"  {x['price']:>9,.0f}  ({x['dist_pct']:+5.1f}%)  {txt}"
                      + ("  ★筹码密集" if x["is_poc"] else ""))
-        L += ["", "── 支撑位(下方) ──"]
+        L += ["", "── 支撑位(下方) ── 「托住N次/试探M次」= 跌到这里被撑住几次"]
         for x in r["support"]:
-            hold = f"{x['held']}/{x['tested']}" if x["tested"] else "-"
-            L.append(f"  {x['price']:>9,.0f}  ({x['dist_pct']:+5.1f}%)  历史守住 {hold}"
+            if x["tested"]:
+                broke = x["tested"] - x["held"]
+                rate = x["held"] / x["tested"]
+                txt = (f"托住 {x['held']}/{x['tested']} 次 (跌破过{broke}次, "
+                       f"托住率{rate:.0%})")
+                if x["tested"] < 5:
+                    txt += " ⚠样本少"
+            else:
+                txt = "无历史测试记录"
+            L.append(f"  {x['price']:>9,.0f}  ({x['dist_pct']:+5.1f}%)  {txt}"
                      + ("  ★筹码密集" if x["is_poc"] else ""))
         L += ["", "── 机械参考位(算法输出,非建议) ──",
               f"  买入参考: {r['entry']:>9,.0f}   (最近支撑上方0.5%)",
@@ -1293,7 +1311,9 @@ class MainWindow(QtWidgets.QMainWindow):
               "· 止损放在支撑下方2倍ATR(日常波动之外)，所以止损幅度看着大——",
               "  这是为了不被随机波动扫出局，代价就是盈亏比被压低。",
               "  想要更高盈亏比，要么等价格更靠近支撑再买，要么接受更紧(更易被扫)的止损。",
-              "· 「历史守住 x/y」= 价格曾y次接近该位，其中x次未被有效突破；y太小=样本不足不可信。",
+              "· 压力位「挡回 x/y」= 价格曾y次涨到该位附近，其中x次被挡下来(y-x次成功突破)。",
+              "  支撑位「托住 x/y」= 价格曾y次跌到该位附近，其中x次被撑住(y-x次被跌破)。",
+              "  次数少(<5)的线样本不足，比率再高也不可信，界面已标⚠。",
               "⚠支撑压力是经验规律不是定律，以上均为算法输出，不构成建议。"]
         self.txt_lv.setPlainText("\n".join(x for x in L if x != ""))
         return r
