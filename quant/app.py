@@ -178,9 +178,10 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs.addTab(self._tab_diagnosis(), "③ 个股趋势诊断")
         tabs.addTab(self._tab_portfolio(), "④ 我的持仓 ★")
         tabs.addTab(self._tab_tracker(), "⑤ 观察记录 ★")
-        tabs.addTab(self._tab_backtest(), "⑥ 因子回测(研究用)")
-        tabs.addTab(self._tab_signal(), "⑦ 信号点位")
-        tabs.addTab(self._tab_log(), "⑧ 试验登记册")
+        tabs.addTab(self._tab_builder(), "⑥ 策略构建器 ★")
+        tabs.addTab(self._tab_backtest(), "⑦ 因子回测(研究用)")
+        tabs.addTab(self._tab_signal(), "⑧ 信号点位")
+        tabs.addTab(self._tab_log(), "⑨ 试验登记册")
         self.setCentralWidget(tabs)
         self.tab_diag_index = 2
         self.statusBar().showMessage("启动中 — 正在检查数据是否最新…")
@@ -641,6 +642,287 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_fav()
         self.statusBar().showMessage(
             f"已收藏 {len(added)} 只: {', '.join(added)}" if added else "未选中股票(或已在收藏中)")
+
+    # ---------- 策略构建器 ----------
+    def _tab_builder(self):
+        import conditions as C
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w)
+
+        intro = QtWidgets.QLabel(
+            "🔧 自己组合条件选股。左侧添加条件(全部满足才入选) → 「回测这套策略」。\n"
+            "系统会强制做三件事：① 训练期/测试期分开(只在训练期好看的不算数) "
+            "② 扣交易成本 ③ 跟全市场等权基准比。三关都过才算真策略。")
+        intro.setWordWrap(True)
+        intro.setStyleSheet("background:#e7f5ff; padding:8px; border-radius:4px; font-size:12px;")
+        lay.addWidget(intro)
+
+        split = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        # ── 左：条件编辑
+        left = QtWidgets.QWidget(); ll = QtWidgets.QVBoxLayout(left)
+        addbar = QtWidgets.QHBoxLayout()
+        self.cb_field = QtWidgets.QComboBox()
+        for k, (_, unit, desc) in C.FIELDS.items():
+            self.cb_field.addItem(k)
+            self.cb_field.setItemData(self.cb_field.count() - 1, f"{k} — {desc}",
+                                      QtCore.Qt.ToolTipRole)
+        self.cb_field.setMinimumWidth(150)
+        self.cb_op = QtWidgets.QComboBox(); self.cb_op.addItems(["<=", ">="])
+        self.sp_val = QtWidgets.QDoubleSpinBox()
+        self.sp_val.setRange(-1e6, 1e6); self.sp_val.setDecimals(2); self.sp_val.setValue(-10)
+        b_addc = QtWidgets.QPushButton("＋ 添加条件"); b_addc.clicked.connect(self.on_cond_add)
+        b_delc = QtWidgets.QPushButton("－ 删除"); b_delc.clicked.connect(self.on_cond_del)
+        for x in (self.cb_field, self.cb_op, self.sp_val, b_addc, b_delc):
+            addbar.addWidget(x)
+        ll.addLayout(addbar)
+        self.lbl_field_hint = QtWidgets.QLabel("")
+        self.lbl_field_hint.setWordWrap(True)
+        self.lbl_field_hint.setStyleSheet("color:#495057; font-size:11px; padding:2px;")
+        self.cb_field.currentTextChanged.connect(
+            lambda k: self.lbl_field_hint.setText(f"「{k}」{C.FIELDS[k][2]}"))
+        self.cb_field.currentTextChanged.emit(self.cb_field.currentText())
+        ll.addWidget(self.lbl_field_hint)
+
+        self.lst_cond = QtWidgets.QListWidget()
+        self.lst_cond.setMaximumHeight(150)
+        ll.addWidget(QtWidgets.QLabel("当前条件(全部满足才入选):"))
+        ll.addWidget(self.lst_cond)
+
+        setbar = QtWidgets.QGridLayout()
+        self.sp_hold = QtWidgets.QSpinBox(); self.sp_hold.setRange(1, 120); self.sp_hold.setValue(20)
+        self.sp_hold.setSuffix(" 天")
+        self.sp_maxpos = QtWidgets.QSpinBox(); self.sp_maxpos.setRange(0, 200); self.sp_maxpos.setValue(20)
+        self.sp_maxpos.setSpecialValueText("不限")
+        self.sp_cost = QtWidgets.QDoubleSpinBox(); self.sp_cost.setRange(0, 100); self.sp_cost.setValue(10)
+        self.sp_cost.setSuffix(" bp")
+        for i, (lb, wd, tip) in enumerate([
+                ("持有天数:", self.sp_hold, "每隔几天换一次仓"),
+                ("最多持股:", self.sp_maxpos, "0=不限。持股太少波动大，太多接近指数"),
+                ("单边成本:", self.sp_cost, "买卖价差+手续费，日股约5~10bp")]):
+            setbar.addWidget(QtWidgets.QLabel(lb), i // 3, (i % 3) * 2)
+            wd.setToolTip(tip)
+            setbar.addWidget(wd, i // 3, (i % 3) * 2 + 1)
+        ll.addLayout(setbar)
+
+        runbar = QtWidgets.QHBoxLayout()
+        b_run = QtWidgets.QPushButton("▶ 回测这套策略")
+        b_run.setStyleSheet("font-weight:bold; padding:7px 16px;")
+        b_run.clicked.connect(self.on_strategy_run)
+        b_today = QtWidgets.QPushButton("📋 看今天选出哪些股")
+        b_today.clicked.connect(self.on_strategy_today)
+        runbar.addWidget(b_run); runbar.addWidget(b_today)
+        ll.addLayout(runbar)
+
+        savebar = QtWidgets.QHBoxLayout()
+        self.cb_strat = QtWidgets.QComboBox(); self.cb_strat.setMinimumWidth(140)
+        self.cb_strat.activated.connect(self.on_strategy_load)
+        b_save = QtWidgets.QPushButton("保存策略"); b_save.clicked.connect(self.on_strategy_save)
+        b_dels = QtWidgets.QPushButton("删除"); b_dels.clicked.connect(self.on_strategy_delete)
+        for x in (QtWidgets.QLabel("已存策略:"), self.cb_strat, b_save, b_dels):
+            savebar.addWidget(x)
+        ll.addLayout(savebar)
+        ll.addStretch()
+        split.addWidget(left)
+
+        # ── 右：结果
+        right = QtWidgets.QWidget(); rl = QtWidgets.QVBoxLayout(right)
+        self.canvas_strat = Canvas(1, 1, (7.5, 3.2), interactive=True)
+        rl.addWidget(self.canvas_strat)
+        self.txt_strat = QtWidgets.QPlainTextEdit(readOnly=True)
+        self.txt_strat.setStyleSheet("font-family: Consolas, monospace; font-size:12px;")
+        rl.addWidget(self.txt_strat)
+        split.addWidget(right)
+        split.setSizes([520, 800])
+        lay.addWidget(split)
+        self._refresh_strat_list()
+        return w
+
+    def on_cond_add(self):
+        f, op, v = self.cb_field.currentText(), self.cb_op.currentText(), self.sp_val.value()
+        it = QtWidgets.QListWidgetItem(f"{f}  {op}  {v:g}")
+        it.setData(QtCore.Qt.UserRole, {"field": f, "op": op, "value": v})
+        self.lst_cond.addItem(it)
+
+    def on_cond_del(self):
+        for it in self.lst_cond.selectedItems():
+            self.lst_cond.takeItem(self.lst_cond.row(it))
+
+    def _get_conditions(self) -> list[dict]:
+        return [self.lst_cond.item(i).data(QtCore.Qt.UserRole)
+                for i in range(self.lst_cond.count())]
+
+    def _refresh_strat_list(self):
+        import strategy
+        self.cb_strat.clear()
+        self.cb_strat.addItem("—")
+        for k in strategy.load_all():
+            self.cb_strat.addItem(k)
+
+    def on_strategy_save(self):
+        conds = self._get_conditions()
+        if not conds:
+            QtWidgets.QMessageBox.information(self, "提示", "还没有添加任何条件")
+            return
+        name, ok = QtWidgets.QInputDialog.getText(self, "保存策略", "策略名称:")
+        if not ok or not name.strip():
+            return
+        import strategy
+        strategy.save_strategy(name.strip(), conds, {
+            "hold": self.sp_hold.value(), "max_pos": self.sp_maxpos.value(),
+            "cost_bp": self.sp_cost.value()})
+        self._refresh_strat_list()
+        self.statusBar().showMessage(f"已保存策略「{name}」")
+
+    def on_strategy_load(self, idx):
+        import strategy
+        name = self.cb_strat.currentText()
+        d = strategy.load_all().get(name)
+        if not d:
+            return
+        self.lst_cond.clear()
+        for c in d["conditions"]:
+            it = QtWidgets.QListWidgetItem(f"{c['field']}  {c['op']}  {c['value']:g}")
+            it.setData(QtCore.Qt.UserRole, c)
+            self.lst_cond.addItem(it)
+        st = d.get("settings", {})
+        self.sp_hold.setValue(st.get("hold", 20))
+        self.sp_maxpos.setValue(st.get("max_pos", 20))
+        self.sp_cost.setValue(st.get("cost_bp", 10))
+
+    def on_strategy_delete(self):
+        import strategy
+        name = self.cb_strat.currentText()
+        if name and name != "—":
+            strategy.delete_strategy(name)
+            self._refresh_strat_list()
+
+    def _strategy_mask(self):
+        import conditions as C
+        conds = self._get_conditions()
+        if not conds:
+            QtWidgets.QMessageBox.information(self, "提示", "请先添加至少一个条件")
+            return None, None
+        vol = to_wide(self.panel, "volume", scrub=False)
+        self._cond_cache = getattr(self, "_cond_cache", {})
+        sel = C.build_mask(conds, self.prices, vol, self.sector, self._cond_cache)
+        sel = sel & self.mask.reindex_like(sel).fillna(False)   # 叠加流动性过滤
+        return sel, conds
+
+    def on_strategy_today(self):
+        if self.prices is None:
+            QtWidgets.QMessageBox.warning(self, "提示", "请先加载数据")
+            return
+        sel, conds = self._strategy_mask()
+        if sel is None:
+            return
+        last = sel.index[-1]
+        picks = list(sel.loc[last][sel.loc[last]].index)
+        L = [f"══ {last.date()} 按当前条件选出 {len(picks)} 只 ══", ""]
+        for c in conds:
+            L.append(f"  条件: {c['field']} {c['op']} {c['value']:g}")
+        L.append("")
+        if not picks:
+            L.append("  今天没有股票同时满足全部条件。可放宽某个阈值再试。")
+        else:
+            import conditions as C
+            fields = [c["field"] for c in conds]
+            L.append(f"  {'代码':<10}{'公司名':<18}" + "".join(f"{f:>16}" for f in fields))
+            L.append("  " + "─" * (28 + 16 * len(fields)))
+            for t in picks[:40]:
+                vals = "".join(f"{self._cond_cache[f].at[last, t]:>16.2f}" for f in fields)
+                L.append(f"  {t:<10}{getattr(self, 'names', {}).get(t, '')[:16]:<18}{vals}")
+            if len(picks) > 40:
+                L.append(f"  ...(共{len(picks)}只，只列前40)")
+        self.txt_strat.setPlainText("\n".join(L))
+        self.tabs.setCurrentIndex(5)
+
+    def on_strategy_run(self):
+        if self.prices is None:
+            QtWidgets.QMessageBox.warning(self, "提示", "请先加载数据")
+            return
+        sel, conds = self._strategy_mask()
+        if sel is None:
+            return
+        import strategy
+        self.statusBar().showMessage("回测中…")
+        QtWidgets.QApplication.processEvents()
+        hold, mp, cb = self.sp_hold.value(), self.sp_maxpos.value(), self.sp_cost.value()
+        SPLIT = "2023-01-01"
+        full = strategy.backtest(sel, self.prices, hold, mp, cb)
+        tr = strategy.backtest(sel, self.prices, hold, mp, cb, end=SPLIT)
+        te = strategy.backtest(sel, self.prices, hold, mp, cb, start=SPLIT)
+        if "error" in full:
+            self.txt_strat.setPlainText(f"回测失败: {full['error']}\n(可能是条件太严，从没选出过股票)")
+            return
+
+        # 登记到试验册(多重检验)
+        import research_log
+        from evaluate import align, compute_ic, forward_returns, ic_summary
+        f = sel.astype(float)
+        fa, ra = align(f, forward_returns(self.prices, hold), self.mask)
+        ic = compute_ic(fa, ra)
+        st = ic_summary(ic, hold) if len(ic) else {"t统计量": float("nan"), "IC均值": float("nan"),
+                                                   "ICIR(年化)": float("nan"), "样本期数": 0}
+        cond_txt = " & ".join(f"{c['field']}{c['op']}{c['value']:g}" for c in conds)
+        research_log.log_trial(f"自建策略[{cond_txt[:40]}]", st,
+                               universe=self.cb_market.currentText(), horizon=hold,
+                               rebalance=hold, ls_ann=full.get("超额年化", float("nan")),
+                               ls_sharpe=full.get("夏普", float("nan")), note="策略构建器")
+        n_trials = len(research_log.load_trials())
+
+        def block(title, r):
+            if "error" in r:
+                return [f"── {title} ──", "  无有效数据", ""]
+            return [
+                f"── {title} ──",
+                f"  年化收益 {r['年化收益']:+7.1%}   基准 {r['基准年化']:+7.1%}   "
+                f"超额 {r['超额年化']:+7.1%}",
+                f"  扣成本后 {r['扣成本年化']:+7.1%}   扣成本超额 {r['扣成本超额']:+7.1%}"
+                f"   (年化成本 {r['年化成本']:.1%})",
+                f"  夏普 {r['夏普']:.2f}   最大回撤 {r['最大回撤']:.1%}   "
+                f"平均持仓 {r['平均持仓数']:.0f}只   换手率 {r['换手率']:.0%}",
+                "",
+            ]
+        L = [f"策略: {cond_txt}",
+             f"设置: 持有{hold}天 / 最多{mp or '不限'}只 / 单边成本{cb:.0f}bp", "=" * 74, ""]
+        L += block("全期(2016~今)", full)
+        L += block("训练期(~2022年末)", tr)
+        L += block("★测试期(2023年至今，样本外，真考验)", te)
+
+        # 判定
+        L.append("══ 判定 ══")
+        ok_oos = te.get("扣成本超额", -1) > 0
+        ok_both = ok_oos and tr.get("扣成本超额", -1) > 0
+        if ok_both:
+            L.append("  ✓ 训练期和测试期扣成本后都跑赢基准 —— 这套策略值得继续观察")
+        elif ok_oos:
+            L.append("  △ 只有测试期跑赢(训练期没有) —— 可能是运气，样本外再看看")
+        elif tr.get("扣成本超额", -1) > 0:
+            L.append("  ✗ 训练期跑赢但测试期跑输 —— **典型的过拟合**，这套条件是在拟合历史")
+        else:
+            L.append("  ✗ 两个时期扣成本后都跑不赢基准 —— 这套条件没有价值")
+        L.append(f"  这是第 {n_trials} 次试验。试的组合越多，撞对的概率越高——")
+        L.append(f"  纯噪声试{n_trials}次，最好的一个也可能看起来不错。别只留下好看的那次。")
+        self.txt_strat.setPlainText("\n".join(L))
+
+        # 净值曲线
+        ax = self.canvas_strat.clear(1, 1)
+        for r, lb, c in [(tr, "训练期", "#868e96"), (te, "测试期(样本外)", "#1971c2")]:
+            if "error" in r:
+                continue
+            d = r["daily"]
+            ax.plot(d.index, (1 + d).cumprod(), lw=1.6, color=c, label=f"策略·{lb}")
+            b = r["bench"]
+            ax.plot(b.index, (1 + b).cumprod(), lw=1.1, ls="--", color=c, alpha=0.6,
+                    label=f"基准·{lb}")
+        ax.axvline(pd.Timestamp(SPLIT), color="#e03131", ls=":", lw=1.4)
+        ax.text(pd.Timestamp(SPLIT), ax.get_ylim()[1], " 样本外起点", color="#e03131",
+                fontsize=8, va="top")
+        ax.set_title("策略 vs 全市场等权基准 (各期起点归一)")
+        ax.legend(fontsize=8); ax.grid(alpha=0.3)
+        self.canvas_strat.draw(); self.canvas_strat.save_home()
+        self._refresh_log()
+        self.statusBar().showMessage("策略回测完成")
 
     # ---------- 观察记录 ----------
     def _tab_tracker(self):

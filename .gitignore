@@ -18,3 +18,4 @@ quant/__pycache__/
 quant/watchlist.json
 quant/portfolio.json
 quant/tracker.json
+quant/strategies.json
