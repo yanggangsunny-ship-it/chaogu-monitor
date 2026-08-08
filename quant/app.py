@@ -358,23 +358,46 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tree_scr.itemClicked.connect(self._tree_hint)
         lay.addWidget(self.tree_scr)
 
-        # 回调风险参考表(可折叠)
-        self.grp_risk = QtWidgets.QGroupBox("📊 回调风险实测：过去20天涨跌 → 之后20天的完整表现 (点标题折叠)")
+        # 回调风险参考表(可折叠,天数可调,右侧带分布图)
+        self.grp_risk = QtWidgets.QGroupBox("📊 涨跌分档实测：过去N天涨跌 → 之后M天的表现 (点标题折叠)")
         self.grp_risk.setCheckable(True)
         self.grp_risk.setChecked(True)
-        self.grp_risk.toggled.connect(lambda on: self.tbl_risk.setVisible(on))
         rl = QtWidgets.QVBoxLayout(self.grp_risk)
+
+        rbar = QtWidgets.QHBoxLayout()
+        self.sp_risk_lb = QtWidgets.QSpinBox()
+        self.sp_risk_lb.setRange(1, 250); self.sp_risk_lb.setValue(20)
+        self.sp_risk_lb.setSuffix(" 天"); self.sp_risk_lb.setToolTip("回看窗口：过去多少个交易日的涨跌")
+        self.sp_risk_fwd = QtWidgets.QSpinBox()
+        self.sp_risk_fwd.setRange(1, 250); self.sp_risk_fwd.setValue(20)
+        self.sp_risk_fwd.setSuffix(" 天"); self.sp_risk_fwd.setToolTip("持有窗口：之后多少个交易日的表现")
+        b_calc = QtWidgets.QPushButton("重新统计")
+        b_calc.clicked.connect(self.on_risk_calc)
+        self.lbl_risk = QtWidgets.QLabel("(点「重新统计」按当前天数计算)")
+        self.lbl_risk.setStyleSheet("color:#495057; font-size:12px;")
+        for x in (QtWidgets.QLabel("过去"), self.sp_risk_lb,
+                  QtWidgets.QLabel("涨跌 → 之后"), self.sp_risk_fwd, QtWidgets.QLabel("表现"),
+                  b_calc, self.lbl_risk):
+            rbar.addWidget(x)
+        rbar.addStretch()
+        rl.addLayout(rbar)
+
+        rsplit = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.tbl_risk = QtWidgets.QTableWidget()
-        self.tbl_risk.setMaximumHeight(240)
-        self._fill_risk_table()
-        rl.addWidget(self.tbl_risk)
+        self.tbl_risk.setMinimumHeight(210)
+        rsplit.addWidget(self.tbl_risk)
+        self.canvas_risk = Canvas(1, 1, (6.2, 3.4), interactive=True)
+        rsplit.addWidget(self.canvas_risk)
+        rsplit.setSizes([760, 560])
+        rl.addWidget(rsplit)
+        self.grp_risk.toggled.connect(rsplit.setVisible)
+
         note2 = QtWidgets.QLabel(
-            "读法：胜率高≠赚得多。「涨>50%」胜率最低(46.4%)但平均收益却排第二(+2.18%)——"
-            "因为它中位数是 -1.30%(多数在亏)，全靠少数暴涨拉高平均，是彩票型分布，"
-            "赢时+19.7%/输时-13.0%，波动极大。\n"
-            "「跌>20%」则是胜率(63.3%)、中位数(+4.34%)、平均(+5.15%)三项全优，分布健康。\n"
-            "⚠但「跌>20%」这档受生存者偏差影响最大：跌完之后退市/破产的公司不在数据里，"
-            "真实表现会比这个数字差。")
+            "读法：胜率高≠赚得多。急涨股常是「胜率低但均值高」的彩票型分布(靠少数暴涨拉平均，"
+            "中位数可能为负)；深跌股若三项(胜率/中位数/平均)全优，才是分布健康。\n"
+            "右图为各档后续收益的分布，虚线=正态分布参考——**实际分布明显比正态胖尾**，"
+            "意味着极端涨跌远比理论频繁，这是仓位管理必须考虑的。\n"
+            "⚠深跌档受生存者偏差影响最大：跌完退市/破产的公司不在数据里，真实表现会更差。")
         note2.setWordWrap(True)
         note2.setStyleSheet("font-size:12px; color:#495057; padding:4px;")
         rl.addWidget(note2)
@@ -382,40 +405,95 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.addWidget(QtWidgets.QLabel("双击任意股票 → 自动跳转到「个股趋势诊断」并显示完整数据"))
         return w
 
-    # 回调风险参考表(Prime全市场10年264万样本实测,静态结果)
-    RISK_TABLE = [
-        ("跌>20%", "63.3%", "+5.15%", "+4.34%", "+13.70%", "-9.60%", "1.43", "-18.4%", "+30.8%"),
-        ("跌10-20%", "57.3%", "+1.91%", "+1.62%", "+9.02%", "-7.63%", "1.18", "-15.8%", "+20.3%"),
-        ("跌0-10%", "55.4%", "+1.20%", "+0.96%", "+7.05%", "-6.06%", "1.16", "-12.7%", "+15.7%"),
-        ("涨0-10%", "53.9%", "+1.02%", "+0.71%", "+6.97%", "-5.93%", "1.18", "-12.4%", "+15.3%"),
-        ("涨10-20%", "52.5%", "+1.17%", "+0.56%", "+8.47%", "-6.90%", "1.23", "-14.6%", "+18.6%"),
-        ("涨20-30%", "51.3%", "+1.37%", "+0.39%", "+10.45%", "-8.19%", "1.28", "-17.2%", "+22.8%"),
-        ("涨30-50%", "51.1%", "+1.79%", "+0.38%", "+12.68%", "-9.58%", "1.32", "-19.3%", "+27.7%"),
-        ("涨>50%", "46.4%", "+2.18%", "-1.30%", "+19.66%", "-12.97%", "1.52", "-26.8%", "+43.1%"),
-        ("— 全样本 —", "54.6%", "+1.26%", "+0.87%", "", "", "", "", ""),
-    ]
-
-    def _fill_risk_table(self):
-        heads = ["过去20天", "上涨概率", "平均收益", "中位数", "赢时均涨", "输时均跌",
-                 "盈亏比", "最差5%", "最好5%"]
+    def on_risk_calc(self):
+        """按当前天数重新统计分档表 + 画分布图"""
+        if self.prices is None:
+            QtWidgets.QMessageBox.warning(self, "提示", "请先在「数据」页加载面板")
+            return
+        import risk_table
+        lb, hz = self.sp_risk_lb.value(), self.sp_risk_fwd.value()
+        self.lbl_risk.setText("统计中…")
+        QtWidgets.QApplication.processEvents()
+        tbl, series = risk_table.compute(self.prices, self.mask, lb, hz)
+        if tbl.empty:
+            self.lbl_risk.setText("样本不足")
+            return
+        self._risk_series = series
+        heads = [f"过去{lb}天", "上涨概率", "平均收益", "中位数", "赢时均涨", "输时均跌",
+                 "盈亏比", "最差5%", "最好5%", "样本数"]
         t = self.tbl_risk
-        t.setColumnCount(len(heads)); t.setRowCount(len(self.RISK_TABLE))
+        t.setColumnCount(len(heads)); t.setRowCount(len(tbl))
         t.setHorizontalHeaderLabels(heads)
         t.verticalHeader().setVisible(False)
-        for i, row in enumerate(self.RISK_TABLE):
-            for j, v in enumerate(row):
+        for i, (_, r) in enumerate(tbl.iterrows()):
+            is_all = str(r["过去N天"]).startswith("—")
+            vals = [str(r["过去N天"]),
+                    f"{r['上涨概率']:.1%}", f"{r['平均收益']:+.2%}", f"{r['中位数']:+.2%}",
+                    f"{r['赢时均涨']:+.2%}" if r["赢时均涨"] == r["赢时均涨"] else "",
+                    f"{r['输时均跌']:+.2%}" if r["输时均跌"] == r["输时均跌"] else "",
+                    f"{r['盈亏比']:.2f}" if r["盈亏比"] == r["盈亏比"] else "",
+                    f"{r['最差5%']:.1%}" if r["最差5%"] == r["最差5%"] else "",
+                    f"{r['最好5%']:+.1%}" if r["最好5%"] == r["最好5%"] else "",
+                    f"{int(r['样本数']):,}"]
+            for j, v in enumerate(vals):
                 it = QtWidgets.QTableWidgetItem(v)
                 if j > 0:
                     it.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-                if row[0] == "— 全样本 —":
+                if is_all:
                     f = it.font(); f.setItalic(True); it.setFont(f)
-                elif j == 3 and v.startswith("-"):      # 中位数为负=多数样本在亏
+                elif j == 3 and v.startswith("-"):          # 中位数为负=多数在亏
                     it.setForeground(QtCore.Qt.red)
                     f = it.font(); f.setBold(True); it.setFont(f)
-                elif j == 1 and float(v.rstrip("%")) < 50:
+                elif j == 1 and r["上涨概率"] < 0.5:
                     it.setForeground(QtCore.Qt.red)
                 t.setItem(i, j, it)
         t.resizeColumnsToContents()
+        t.itemSelectionChanged.connect(self._draw_risk_dist)
+        self.lbl_risk.setText(f"共 {int(tbl['样本数'].iloc[-1]):,} 个样本 | 点表格任一行看该档分布")
+        self._draw_risk_dist()
+
+    def _draw_risk_dist(self):
+        """右侧分布图：选中档位的收益分布 + 正态参考曲线"""
+        series = getattr(self, "_risk_series", None)
+        if not series:
+            return
+        rows = {i.row() for i in self.tbl_risk.selectedItems()}
+        keys = list(series.keys())
+        if rows:
+            i = min(rows)
+            key = self.tbl_risk.item(i, 0).text() if self.tbl_risk.item(i, 0) else keys[-1]
+        else:
+            key = "— 全样本 —" if "— 全样本 —" in series else keys[0]
+        data = series.get(key)
+        if data is None or not len(data):
+            return
+        d = np.asarray(data, dtype=float)
+        d = d[np.isfinite(d)]
+        lim = np.percentile(np.abs(d), 99)          # 截尾显示,否则极端值把图压扁
+        show = d[np.abs(d) <= lim]
+
+        ax = self.canvas_risk.clear(1, 1)
+        ax.hist(show, bins=70, density=True, alpha=0.65, color="#4dabf7",
+                edgecolor="none", label=f"实际分布 (n={len(d):,})")
+        mu, sd = d.mean(), d.std()
+        xs = np.linspace(-lim, lim, 300)
+        ax.plot(xs, np.exp(-((xs - mu) ** 2) / (2 * sd ** 2)) / (sd * np.sqrt(2 * np.pi)),
+                color="#e03131", ls="--", lw=1.6, label="正态分布参考")
+        ax.axvline(0, color="#495057", lw=0.9)
+        ax.axvline(mu, color="#2f9e44", lw=1.4, label=f"均值 {mu:+.2%}")
+        ax.axvline(np.median(d), color="#f08c00", lw=1.4, ls=":",
+                   label=f"中位数 {np.median(d):+.2%}")
+        # 峰度: >3 表示比正态胖尾(极端行情更频繁)
+        kurt = float(((d - mu) ** 4).mean() / (sd ** 4)) if sd else float("nan")
+        ax.set_title(f"【{key}】之后{self.sp_risk_fwd.value()}日收益分布  峰度{kurt:.1f}"
+                     f"{'(远胖于正态)' if kurt > 5 else '(接近正态)' if kurt < 4 else '(胖尾)'}",
+                     fontsize=10)
+        ax.set_xlabel("收益率"); ax.set_ylabel("概率密度")
+        ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.0%}"))
+        ax.legend(fontsize=8)
+        ax.grid(alpha=0.3)
+        self.canvas_risk.draw()
+        self.canvas_risk.save_home()
 
     def _on_mode_change(self, mode: str):
         """超跌模式下把两个门槛的含义和默认值一起切过去，避免用户被误导"""
@@ -533,6 +611,8 @@ class MainWindow(QtWidgets.QMainWindow):
         cond = (f"跌幅≥{self.sp_exc.value():.0f}% 得分≤{self.sp_minscore.value()}"
                 if is_os else f"超额门槛{self.sp_exc.value():.0f}%")
         self.lbl_scan.setText(f"数据 {d} | {self.cb_mode.currentText()} {cond} | {scan_summary(res)}")
+        if not getattr(self, "_risk_series", None):    # 首次扫描后顺带算一次分档表
+            QtCore.QTimer.singleShot(100, self.on_risk_calc)
         self.statusBar().showMessage(f"扫描完成: {scan_summary(res)}")
 
     def _tree_hint(self, item, col):
