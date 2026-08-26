@@ -119,11 +119,11 @@
     "down_tier": 0
   },
   "_global": {
-    "earnings_check_date": "2026-08-26",
+    "earnings_check_date": "2026-08-27",
     "earnings": {
       "9984.T": {
-        "date": "2026-08-06",
-        "estimate": false,
+        "date": "2026-11-11",
+        "estimate": true,
         "reminded_for": "2026-08-06"
       },
       "285A.T": {
@@ -132,13 +132,13 @@
         "reminded_for": "2026-07-31"
       },
       "7012.T": {
-        "date": "2026-08-07",
-        "estimate": false,
+        "date": "2026-11-11",
+        "estimate": true,
         "reminded_for": "2026-08-07"
       },
       "7011.T": {
-        "date": "2026-08-04",
-        "estimate": false,
+        "date": "2026-11-06",
+        "estimate": true,
         "reminded_for": "2026-08-04"
       },
       "6954.T": {
@@ -163,13 +163,13 @@
         "reminded_for": "2026-07-29"
       },
       "8306.T": {
-        "date": "2026-08-03",
-        "estimate": false,
+        "date": "2026-11-12",
+        "estimate": true,
         "reminded_for": "2026-08-03"
       },
       "7186.T": {
-        "date": "2026-08-05",
-        "estimate": false,
+        "date": "2026-11-12",
+        "estimate": true,
         "reminded_for": "2026-08-05"
       },
       "4751.T": {
@@ -178,7 +178,7 @@
         "reminded_for": "2026-08-07"
       },
       "6758.T": {
-        "date": "2026-07-31",
+        "date": "2026-11-05",
         "estimate": false,
         "reminded_for": "2026-07-31"
       },
@@ -189,7 +189,7 @@
       },
       "1579.T": {},
       "8593.T": {
-        "date": "2026-08-07",
+        "date": "2026-11-12",
         "estimate": false,
         "reminded_for": "2026-08-07"
       }
@@ -207,7 +207,7 @@
       "1271969",
       "1275399"
     ],
-    "premarket_date": "2026-08-26",
+    "premarket_date": "2026-08-27",
     "screen_date": "2026-08-26"
   }
 }
