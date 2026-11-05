@@ -119,12 +119,12 @@
     "down_tier": 0
   },
   "_global": {
-    "earnings_check_date": "2026-11-05",
+    "earnings_check_date": "2026-11-06",
     "earnings": {
       "9984.T": {
         "date": "2026-11-10",
         "estimate": false,
-        "reminded_for": "2026-08-06"
+        "reminded_for": "2026-11-10"
       },
       "285A.T": {
         "date": "2027-01-28",
@@ -134,7 +134,7 @@
       "7012.T": {
         "date": "2026-11-10",
         "estimate": false,
-        "reminded_for": "2026-08-07"
+        "reminded_for": "2026-11-10"
       },
       "7011.T": {
         "date": "2026-11-06",
@@ -212,7 +212,7 @@
       "1284344",
       "1286524"
     ],
-    "premarket_date": "2026-11-05",
+    "premarket_date": "2026-11-06",
     "screen_date": "2026-11-05"
   }
 }
