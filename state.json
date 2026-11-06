@@ -4,7 +4,7 @@
     "last_close_date": "2026-11-05",
     "alert_date": "2026-11-06",
     "up_tier": 0,
-    "down_tier": 1
+    "down_tier": 2
   },
   "9984.T": {
     "last_open_date": "2026-07-08",
@@ -25,7 +25,7 @@
     "last_close_date": "2026-11-05",
     "alert_date": "2026-11-06",
     "up_tier": 0,
-    "down_tier": 0
+    "down_tier": 3
   },
   "7011.T": {
     "last_open_date": "2026-07-08",
@@ -53,7 +53,7 @@
     "last_close_date": "2026-11-05",
     "alert_date": "2026-11-06",
     "up_tier": 0,
-    "down_tier": 0
+    "down_tier": 3
   },
   "9697.T": {
     "last_open_date": "2026-07-08",
@@ -74,14 +74,14 @@
     "last_close_date": "2026-11-05",
     "alert_date": "2026-11-06",
     "up_tier": 0,
-    "down_tier": 0
+    "down_tier": 2
   },
   "7186.T": {
     "last_open_date": "2026-07-08",
     "last_close_date": "2026-11-05",
     "alert_date": "2026-11-06",
     "up_tier": 0,
-    "down_tier": 0
+    "down_tier": 3
   },
   "4751.T": {
     "last_open_date": "2026-07-08",
