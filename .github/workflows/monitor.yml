@@ -26,7 +26,15 @@ jobs:
           cache: pip
 
       - name: 安装中文字体(图表用)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk
+        # 字体只影响图表里的中文显示，装不上也不该让整轮监控失败(推送比图表重要)。
+        # 2026-11-27: runner预装的微软apt源返回403 Forbidden，令apt-get update整体
+        # 退出码100、整个workflow失败 → 先删掉这些第三方源再更新，且整步设为可失败。
+        continue-on-error: true
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft*.list || true
+          sudo rm -f /etc/apt/sources.list.d/microsoft*.sources || true
+          sudo apt-get update -qq || true
+          sudo apt-get install -y -qq fonts-noto-cjk
 
       - name: 安装依赖
         run: pip install -q -r requirements.txt
